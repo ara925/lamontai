@@ -1,0 +1,12 @@
+{
+  "name": "auth-e2e-test",
+  "version": "1.0.0",
+  "description": "End-to-end authentication test",
+  "main": "e2e-auth-test.js",
+  "type": "module",
+  "dependencies": {
+    "puppeteer": "^24.6.1",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-stealth": "^2.11.2"
+  }
+} 

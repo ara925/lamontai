@@ -1,0 +1,115 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id              String    @id @default(cuid())
+  name            String
+  email           String    @unique
+  password        String
+  ipAddress       String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  role            String    @default("user")
+  contentPlans    ContentPlan[]
+  articles        Article[]
+  settings        Settings?
+  subscriptions   Subscription?
+  analyticsData   Analytics[]
+  sessions        Session[]
+}
+
+model Settings {
+  id              String    @id @default(cuid())
+  userId          String    @unique
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  theme           String    @default("light")
+  language        String    @default("english")
+  notifications   Boolean   @default(true)
+  apiKey          String?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model ContentPlan {
+  id              String    @id @default(cuid())
+  title           String
+  description     String?
+  status          String    @default("draft") // draft, in-progress, completed
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  articles        Article[]
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model Article {
+  id              String    @id @default(cuid())
+  title           String
+  content         String?   @db.Text
+  status          String    @default("draft") // draft, published, archived
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  contentPlanId   String?
+  contentPlan     ContentPlan? @relation(fields: [contentPlanId], references: [id])
+  keywords        String?
+  metaDescription String?
+  publishedAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model Subscription {
+  id              String    @id @default(cuid())
+  userId          String    @unique
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId          String
+  plan            Plan      @relation(fields: [planId], references: [id])
+  status          String    @default("active") // active, canceled, expired
+  startDate       DateTime  @default(now())
+  endDate         DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model Plan {
+  id              String    @id @default(cuid())
+  name            String
+  price           Float
+  description     String?
+  features        String?
+  subscriptions   Subscription[]
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model Analytics {
+  id              String    @id @default(cuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  pageViews       Int       @default(0)
+  visitors        Int       @default(0)
+  bounceRate      Float?
+  averageDuration Float?
+  date            DateTime  @default(now())
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model Session {
+  id              String    @id @default(cuid())
+  userId          String
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  token           String    @unique
+  expiresAt       DateTime
+  userAgent       String?
+  ipAddress       String?
+  lastActiveAt    DateTime  @default(now())
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+} 
