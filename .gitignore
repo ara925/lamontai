@@ -134,3 +134,48 @@ dist
 .yarn/build-state.yml
 .yarn/install-state.gz
 .pnp.*
+
+# Explicitly exclude problematic directories
+lamontai/
+
+# Test files
+test-*.js
+*-test.js
+*.test.js
+*-auth-*.js
+simple-auth-test.js
+debug-*.js
+identify-form-elements.js
+check-*.js
+clear-auth-cookies.js
+quick-audit.js
+run-audits.js
+check-website.js
+setup-and-test.ps1
+screenshot-pages.js
+
+# Screenshots and images
+screenshots/
+puppeteer-screenshots/
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.ico
+
+# Ripped website content
+rip/
+babylovegrowth_source.html
+page_content.txt
+
+# Audit results
+audit-results/
+
+# Chrome extension
+chrome-extension/
+
+# PowerShell scripts
+*.ps1
+
+# Rich Text documents
+*.rtf
