@@ -7,6 +7,7 @@ import { db } from "./db";
 import { generateToken, verifyToken, verifyJWT } from "./server-auth-utils";
 import { NextRequest } from "next/server";
 import * as jose from 'jose';
+import { users, MockUser } from './mock-data';
 
 // Session duration in days
 const SESSION_DURATION_DAYS = 7;
@@ -15,7 +16,7 @@ const SESSION_DURATION_DAYS = 7;
 export interface SessionUser {
   id: string;
   email: string;
-  name: string;
+  name: string | null;
   role: string;
 }
 
@@ -68,6 +69,20 @@ export async function getUserBySessionToken(token: string): Promise<SessionUser 
     const payload = await verifyJWT(token);
     if (!payload || !payload.id) return null;
     
+    // For development/testing, use mock data
+    if (process.env.NODE_ENV === 'development') {
+      const mockUser = users.find(user => user.id === payload.id);
+      if (mockUser) {
+        return {
+          id: mockUser.id,
+          email: mockUser.email,
+          name: mockUser.name,
+          role: mockUser.role
+        };
+      }
+    }
+    
+    // For production, use database
     const user = await db.user.findUnique({
       where: { id: payload.id },
       select: {
@@ -78,12 +93,11 @@ export async function getUserBySessionToken(token: string): Promise<SessionUser 
       },
     });
     
-    // Handle null name to satisfy SessionUser interface requirements
     if (user) {
       return {
         id: user.id,
         email: user.email,
-        name: user.name || '', // Convert null to empty string
+        name: user.name,
         role: user.role
       };
     }

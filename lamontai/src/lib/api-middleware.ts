@@ -34,9 +34,26 @@ export function withSecurityHeaders(handler: any) {
  */
 export function withCompression(handler: any) {
   return async (req: NextRequest, ...args: any[]) => {
-    // For Next.js App Router, compression is handled at the infrastructure level
-    // This is a placeholder to maintain the middleware chain
-    return handler(req, ...args);
+    try {
+      // For Next.js App Router, compression is handled at the infrastructure level
+      // This is a placeholder to maintain the middleware chain
+      return await handler(req, ...args);
+    } catch (error) {
+      console.error('API compression middleware error:', error);
+      
+      // Ensure we return JSON errors, not HTML
+      return new NextResponse(
+        JSON.stringify({ 
+          success: false, 
+          message: 'An error occurred processing the request',
+          error: error instanceof Error ? error.message : 'Unknown error'
+        }),
+        { 
+          status: 500, 
+          headers: { 'Content-Type': 'application/json' } 
+        }
+      );
+    }
   };
 }
 
