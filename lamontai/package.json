@@ -47,7 +47,7 @@
     "@types/react": "18.2.67",
     "@types/react-dom": "18.2.22",
     "@types/redis": "^4.0.10",
-    "@types/xml2js": "^0.4.15",
+    "@types/xml2js": "^0.4.13",
     "autoprefixer": "10.4.18",
     "axios": "^1.8.4",
     "bcrypt": "^5.1.1",
