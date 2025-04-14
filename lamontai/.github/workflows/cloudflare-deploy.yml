@@ -5,6 +5,7 @@ on:
     branches:
       - main
       - staging
+      - feature/cloudflare-database
   pull_request:
     branches:
       - main
@@ -39,7 +40,7 @@ jobs:
   deploy:
     needs: test
     runs-on: ubuntu-latest
-    # Skip deployment for pull requests, only deploy on push to main or staging
+    # Skip deployment for pull requests, only deploy on push to main or staging or feature branch
     if: github.event_name == 'push'
     
     steps:
@@ -63,6 +64,15 @@ jobs:
             echo "CLOUDFLARE_DB_ID=715abbe3-5697-497b-8a6a-f4722632b741" >> $GITHUB_ENV
             echo "DATABASE_URL=${{ secrets.DATABASE_URL_CLOUDFLARE }}" >> $GITHUB_ENV
             echo "LOG_LEVEL=error" >> $GITHUB_ENV
+            echo "NEXT_PUBLIC_DEPLOY_ENV=cloudflare" >> $GITHUB_ENV
+            echo "NEXT_PUBLIC_CLOUDFLARE_ENABLED=true" >> $GITHUB_ENV
+          elif [[ ${{ github.ref }} == 'refs/heads/feature/cloudflare-database' ]]; then
+            echo "ENVIRONMENT=development" >> $GITHUB_ENV
+            echo "CLOUDFLARE_PROJECT=lamontai-dev" >> $GITHUB_ENV
+            echo "APP_DOMAIN=dev.lamontai.com" >> $GITHUB_ENV
+            echo "CLOUDFLARE_DB_ID=715abbe3-5697-497b-8a6a-f4722632b741" >> $GITHUB_ENV
+            echo "DATABASE_URL=${{ secrets.DATABASE_URL_CLOUDFLARE_STAGING }}" >> $GITHUB_ENV
+            echo "LOG_LEVEL=debug" >> $GITHUB_ENV
             echo "NEXT_PUBLIC_DEPLOY_ENV=cloudflare" >> $GITHUB_ENV
             echo "NEXT_PUBLIC_CLOUDFLARE_ENABLED=true" >> $GITHUB_ENV
           else
@@ -112,11 +122,35 @@ jobs:
           
           # Use the created .env.deploy file as .env.local for the build
           cp .env.deploy .env.local
+          
+          # Also create .env for additional variable resolution
+          cp .env.deploy .env
       
       - name: Build application
         working-directory: lamontai
         run: |
-          NEXT_PUBLIC_DEPLOY_ENV=cloudflare npm run build
+          # Install additional polyfills if needed
+          npm install --no-save stream-browserify
+          npm install --no-save crypto-browserify
+          
+          # Set required environment variables and build
+          export NEXT_PUBLIC_DEPLOY_ENV=cloudflare
+          export NODE_ENV=${{ env.ENVIRONMENT }}
+          
+          # Run build with detailed output
+          npm run build
+      
+      - name: Verify build output
+        working-directory: lamontai
+        run: |
+          if [ ! -d "./.next" ]; then
+            echo "Build output directory .next not found!"
+            exit 1
+          fi
+          
+          # List build output to verify content
+          echo "Build output contents:"
+          ls -la ./.next
       
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/pages-action@v1
