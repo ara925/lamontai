@@ -18,6 +18,7 @@ model User {
   role            String    @default("user")
   contentPlans    ContentPlan[]
   articles        Article[]
+  posts           Post[]
   settings        Settings?
   subscriptions   Subscription?
   analyticsData   Analytics[]
@@ -118,6 +119,17 @@ model Session {
   userAgent       String?
   ipAddress       String?
   lastActiveAt    DateTime  @default(now())
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model Post {
+  id              String    @id @default(cuid())
+  title           String
+  content         String    @db.Text
+  published       Boolean   @default(false)
+  authorId        String
+  author          User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 } 

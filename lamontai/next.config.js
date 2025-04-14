@@ -78,6 +78,39 @@ const nextConfig = {
   
   // Output configuration for Cloudflare deployment
   output: process.env.NEXT_PUBLIC_DEPLOY_ENV === 'cloudflare' ? 'standalone' : undefined,
+  
+  // Webpack configuration for Cloudflare compatibility
+  webpack: (config, { isServer, dev }) => {
+    // Polyfill Node.js modules for Cloudflare
+    if (process.env.NEXT_PUBLIC_DEPLOY_ENV === 'cloudflare') {
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        crypto: require.resolve('crypto-browserify'),
+        stream: require.resolve('stream-browserify'),
+        buffer: require.resolve('buffer'),
+        util: require.resolve('util'),
+        http: require.resolve('stream-http'),
+        https: require.resolve('https-browserify'),
+        querystring: require.resolve('querystring-es3'),
+        fs: false,
+        path: require.resolve('path-browserify'),
+        os: require.resolve('os-browserify/browser'),
+        zlib: require.resolve('browserify-zlib'),
+        assert: require.resolve('assert/'),
+      };
+      
+      // Import webpack instead of using config.constructor.ProvidePlugin
+      const webpack = require('webpack');
+      config.plugins.push(
+        new webpack.ProvidePlugin({
+          Buffer: ['buffer', 'Buffer'],
+          process: 'process/browser',
+        })
+      );
+    }
+    
+    return config;
+  },
 }
 
 module.exports = nextConfig;

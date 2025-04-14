@@ -1,100 +1,129 @@
 /**
- * Edge runtime compatible authentication utilities
- * Use these utilities in Edge functions and Cloudflare Workers/Pages environments
+ * Edge-compatible authentication utilities
+ * Uses Web Crypto API instead of Node.js crypto
  */
 
-import * as jose from 'jose';
+import { jwtVerify, SignJWT } from 'jose';
+import { cookies } from 'next/headers';
+import { NextRequest } from 'next/server';
 
-// Type for the JWT payload
-export interface JWTPayload extends jose.JWTPayload {
-  id: string;
-  email: string;
-  role: string;
-}
+// Create a TextEncoder for string to Uint8Array conversion
+const encoder = new TextEncoder();
+
+// Get the JWT secret from environment variables
+const getJwtSecret = () => {
+  const secret = process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET;
+  
+  if (!secret) {
+    throw new Error('JWT_SECRET or NEXTAUTH_SECRET is not defined');
+  }
+  
+  return encoder.encode(secret);
+};
 
 /**
- * Verify a JWT token in Edge runtime
+ * Generate a JWT token using Web Crypto API
  */
-export async function verifyJWTEdge(token: string): Promise<JWTPayload | null> {
-  if (!token || token.length < 20) {
-    console.log('EDGE: Invalid token (too short or empty)');
-    return null;
-  }
-
-  const jwtSecret = process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET;
-  if (!jwtSecret) {
-    console.error('EDGE: JWT secret environment variable is not set');
-    return null;
-  }
-  
-  const encodedSecret = new TextEncoder().encode(jwtSecret);
-  
+export async function generateJwtToken(payload: any) {
   try {
-    const { payload } = await jose.jwtVerify(token, encodedSecret, {
-      algorithms: ['HS256']
-    });
+    const secret = await getJwtSecret();
     
-    const decoded = payload as JWTPayload;
-
-    if (!decoded.id || !decoded.email) {
-      console.log('EDGE: Token missing required fields');
-      return null;
-    }
+    // Create and sign the JWT
+    const token = await new SignJWT(payload)
+      .setProtectedHeader({ alg: 'HS256' })
+      .setIssuedAt()
+      .setExpirationTime('7d') // 7 days expiry
+      .sign(secret);
     
-    return decoded;
+    return token;
   } catch (error) {
-    console.error('EDGE: Token verification error:', error instanceof Error ? error.message : String(error));
+    console.error('Error generating JWT token:', error);
     return null;
   }
 }
 
 /**
- * Generate a JWT token in Edge runtime
+ * Verify a JWT token using Web Crypto API
  */
-export async function generateJWTEdge(payload: { id: string; email: string; role: string }): Promise<string> {
-  const jwtSecret = process.env.JWT_SECRET || process.env.NEXTAUTH_SECRET;
-  if (!jwtSecret) {
-    throw new Error('JWT secret environment variable is not set');
-  }
-  
-  const encodedSecret = new TextEncoder().encode(jwtSecret);
-  
-  const jwt = await new jose.SignJWT(payload)
-    .setProtectedHeader({ alg: 'HS256' })
-    .setIssuedAt()
-    .setExpirationTime('7d')
-    .sign(encodedSecret);
+export async function verifyJwtToken(token: string) {
+  try {
+    const secret = await getJwtSecret();
     
-  return jwt;
+    // Verify the JWT
+    const { payload } = await jwtVerify(token, secret);
+    return payload;
+  } catch (error) {
+    console.error('Error verifying JWT token:', error);
+    return null;
+  }
 }
 
 /**
- * Extract token from request in Edge runtime
+ * Set a JWT token as an HTTP-only cookie
  */
-export function getTokenFromRequestEdge(request: Request): string | null {
-  // Try authorization header first
-  const authHeader = request.headers.get('Authorization');
-  if (authHeader?.startsWith('Bearer ')) {
-    return authHeader.substring(7);
+export function setAuthCookie(token: string | null) {
+  if (!token) return; // Skip if token is null
+  
+  cookies().set({
+    name: 'auth_token',
+    value: token,
+    httpOnly: true,
+    secure: process.env.NODE_ENV === 'production',
+    sameSite: 'lax',
+    path: '/',
+    maxAge: 7 * 24 * 60 * 60 // 7 days in seconds
+  });
+}
+
+/**
+ * Get a token from cookies or request headers
+ */
+export function getTokenFromRequest(request: NextRequest): string | null {
+  // First, try to get token from cookie
+  const cookie = request.cookies.get('auth_token');
+  if (cookie) {
+    return cookie.value;
   }
   
-  // Parse cookies manually for standard Request
-  const cookieHeader = request.headers.get('cookie');
-  if (cookieHeader) {
-    const cookies = cookieHeader.split(';').map(cookie => cookie.trim());
-    
-    // Check for token cookie
-    const tokenCookie = cookies.find(cookie => cookie.startsWith('token='));
-    if (tokenCookie) {
-      return tokenCookie.substring(6); // Remove 'token=' prefix
-    }
-    
-    // Check for next-auth.session-token cookie (NextAuth.js)
-    const nextAuthCookie = cookies.find(cookie => cookie.startsWith('next-auth.session-token='));
-    if (nextAuthCookie) {
-      return nextAuthCookie.substring('next-auth.session-token='.length);
-    }
+  // Then, try to get token from Authorization header
+  const authHeader = request.headers.get('Authorization');
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    return authHeader.slice(7); // Remove 'Bearer ' prefix
   }
   
   return null;
+}
+
+/**
+ * Get a token from cookies in middleware or edge functions
+ */
+export function getTokenFromRequestEdge(request: NextRequest): string | null {
+  return getTokenFromRequest(request);
+}
+
+/**
+ * Verify JWT in edge functions
+ */
+export async function verifyJWTEdge(token: string) {
+  return verifyJwtToken(token);
+}
+
+/**
+ * Hash a password using Web Crypto API
+ * Note: This is a simple implementation and not as secure as bcrypt.
+ * In production, consider using a service like Auth0 or a custom API endpoint.
+ */
+export async function hashPasswordEdge(password: string): Promise<string> {
+  const data = encoder.encode(password);
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(byte => byte.toString(16).padStart(2, '0')).join('');
+}
+
+/**
+ * Compare a password with a hash using Web Crypto API
+ */
+export async function comparePasswordEdge(password: string, hash: string): Promise<boolean> {
+  const passwordHash = await hashPasswordEdge(password);
+  return passwordHash === hash;
 } 

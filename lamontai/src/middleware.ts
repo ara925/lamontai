@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifyToken } from './lib/server-auth-utils';
 import { Errors, handleApiError } from './lib/error-handler';
 import { Redis } from 'ioredis';
+import { getTokenFromRequestEdge, verifyJWTEdge } from '@/lib/auth-utils-edge';
 
 /**
  * Rate limiting configuration
@@ -136,8 +137,92 @@ function addSecurityHeaders(response: NextResponse) {
 
 // Temporarily disable middleware for debugging
 export async function middleware(request: NextRequest) {
-  // Simply pass through all requests during debugging
-  return NextResponse.next();
+  const response = NextResponse.next();
+  
+  try {
+    // Special case for edge routes that handle their own auth
+    if (request.nextUrl.pathname.includes('/api/users/edge') ||
+        request.nextUrl.pathname.includes('/api/posts/edge')) {
+      return response;
+    }
+    
+    // Skip auth check for public routes 
+    if (request.nextUrl.pathname === '/api/health' ||
+        request.nextUrl.pathname === '/api/public') {
+      return response;
+    }
+
+    // Add CORS headers for API routes
+    response.headers.set('Access-Control-Allow-Credentials', 'true');
+    response.headers.set('Access-Control-Allow-Origin', '*');
+    response.headers.set('Access-Control-Allow-Methods', 'GET,DELETE,PATCH,POST,PUT');
+    response.headers.set('Access-Control-Allow-Headers', 
+      'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
+
+    // Handle preflight requests
+    if (request.method === 'OPTIONS') {
+      return response;
+    }
+
+    // Check for authentication token
+    const token = getTokenFromRequestEdge(request);
+    if (!token) {
+      return new NextResponse(
+        JSON.stringify({ error: 'Authentication required' }),
+        {
+          status: 401,
+          headers: {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET,DELETE,PATCH,POST,PUT',
+          },
+        }
+      );
+    }
+
+    // Verify JWT token
+    const payload = await verifyJWTEdge(token);
+    if (!payload) {
+      return new NextResponse(
+        JSON.stringify({ error: 'Invalid token' }),
+        {
+          status: 401,
+          headers: {
+            'Content-Type': 'application/json',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Allow-Methods': 'GET,DELETE,PATCH,POST,PUT',
+          },
+        }
+      );
+    }
+
+    // Add the user ID to the request headers for API routes to use
+    if (payload.sub) {
+      response.headers.set('X-User-ID', payload.sub as string);
+    }
+    
+    // Add the user role if available
+    if (payload.role) {
+      response.headers.set('X-User-Role', payload.role as string);
+    }
+
+    return response;
+  } catch (error) {
+    console.error('Middleware error:', error);
+    
+    // Return a generic error
+    return new NextResponse(
+      JSON.stringify({ error: 'Internal server error' }),
+      {
+        status: 500,
+        headers: {
+          'Content-Type': 'application/json',
+          'Access-Control-Allow-Origin': '*',
+          'Access-Control-Allow-Methods': 'GET,DELETE,PATCH,POST,PUT',
+        },
+      }
+    );
+  }
 }
 
 /**
@@ -145,11 +230,9 @@ export async function middleware(request: NextRequest) {
  */
 export const config = {
   matcher: [
-    // Match all API routes
-    '/api/:path*', 
-    // Match all dashboard routes (requires authentication)
-    '/dashboard/:path*',
-    // Match all onboarding routes (requires authentication)
-    '/onboarding/:path*',
+    // Match all API routes except those that are edge-compatible
+    '/api/((?!auth/edge|posts/edge|users/edge|stest|edge-test).*)',
   ],
+  // Specify that we want this middleware to run on both Node.js and Edge
+  runtime: 'experimental-edge',
 }; 

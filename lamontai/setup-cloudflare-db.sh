@@ -35,13 +35,20 @@ CONNECTION_STRING="postgresql://$DB_USERNAME:$DB_PASSWORD@$CLOUDFLARE_DB_ID.$DB_
 # Update .env.local with the new connection string
 sed -i'.bak' '/^DATABASE_URL=/d' .env.local
 sed -i'.bak' '/^CLOUDFLARE_DB_ID=/d' .env.local
+sed -i'.bak' '/^NEXT_PUBLIC_DEPLOY_ENV=/d' .env.local
+sed -i'.bak' '/^NEXT_PUBLIC_CLOUDFLARE_ENABLED=/d' .env.local
 echo "" >> .env.local
 echo "# Cloudflare Database connection" >> .env.local
 echo "DATABASE_URL=$CONNECTION_STRING" >> .env.local
 echo "CLOUDFLARE_DB_ID=$CLOUDFLARE_DB_ID" >> .env.local
+echo "" >> .env.local
+echo "# Cloudflare Edge Runtime settings" >> .env.local
+echo "NEXT_PUBLIC_DEPLOY_ENV=cloudflare" >> .env.local
+echo "NEXT_PUBLIC_CLOUDFLARE_ENABLED=true" >> .env.local
 
 echo -e "\n${GREEN}Database connection configured successfully!${NC}"
 echo -e "${YELLOW}Your Cloudflare database connection has been added to .env.local${NC}"
+echo -e "${YELLOW}Edge Runtime settings have been enabled${NC}"
 echo ""
 
 # Ask if the user wants to initialize the database
@@ -76,6 +83,9 @@ echo -e "  ${GREEN}npm run dev${NC}"
 echo ""
 echo -e "If you want to test with Cloudflare compatibility mode:"
 echo -e "  ${GREEN}NEXT_PUBLIC_DEPLOY_ENV=cloudflare npm run dev${NC}"
+echo ""
+echo -e "To test Edge-compatible API endpoints, visit:"
+echo -e "  ${GREEN}http://localhost:3001/api/users/edge${NC}"
 echo ""
 echo -e "${RED}IMPORTANT: Make sure to add these secrets to your GitHub repository:${NC}"
 echo -e "  DATABASE_URL_CLOUDFLARE"

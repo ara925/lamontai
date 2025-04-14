@@ -295,3 +295,14 @@ This script:
 4. Deploy your application
 
 Your application is now using Neon PostgreSQL which is designed for serverless environments like Cloudflare Pages or Workers.
+
+## Edge-Compatible APIs
+
+LamontAI includes Edge-compatible API routes designed to run on Cloudflare and other edge runtime environments. These APIs offer lower latency and better performance for users worldwide.
+
+See [README-EDGE-API.md](./README-EDGE-API.md) for detailed documentation on:
+- Edge API implementation details
+- Authentication in edge environments
+- Database connectivity with Neon PostgreSQL
+- Differences between Node.js and Edge APIs
+- When to use Edge vs. Node.js APIs

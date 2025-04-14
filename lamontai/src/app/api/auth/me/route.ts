@@ -1,92 +1,93 @@
 /**
- * API route to check current user authentication
- * Works in both Node.js and Edge/Cloudflare environments
+ * Edge-compatible /api/auth/me route
+ * Provides user information based on JWT token
  */
-import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth';
-import { authOptions } from '@/lib/auth-config';
-import { getTokenFromRequestEdge, verifyJWTEdge } from '@/lib/auth-utils-edge';
-import { users } from '@/lib/mock-data';
 
-// Ensure this route is always dynamically rendered
-export const dynamic = 'force-dynamic';
-// Specify that this can run in edge runtime
+import { NextRequest } from 'next/server';
+import { getTokenFromRequestEdge, verifyJWTEdge } from '@/lib/auth-utils-edge';
+import { getNeonPrismaClient } from '@/lib/prisma-cloudflare';
+
+// Specify Edge runtime
 export const runtime = 'edge';
+
+// Use dynamic rendering to ensure fresh data
+export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
   try {
-    // First try to get session from NextAuth
-    const session = await getServerSession(authOptions);
-    
-    if (session?.user) {
-      // User is authenticated via NextAuth
-      return NextResponse.json({
-        success: true,
-        message: 'Authenticated with NextAuth',
-        user: {
-          id: session.user.id,
-          email: session.user.email,
-          name: session.user.name,
-          role: session.user.role || 'user',
-          provider: 'nextauth'
-        }
-      });
-    }
-    
-    // If no NextAuth session, try JWT token
+    // Extract JWT token from request
     const token = getTokenFromRequestEdge(request);
     
-    if (token) {
-      const payload = await verifyJWTEdge(token);
-      
-      if (payload) {
-        // For development/testing with mock data
-        if (process.env.NODE_ENV === 'development') {
-          const mockUser = users.find(user => user.id === payload.id);
-          if (mockUser) {
-            return NextResponse.json({
-              success: true,
-              message: 'Authenticated with JWT token',
-              user: {
-                id: mockUser.id,
-                email: mockUser.email,
-                name: mockUser.name,
-                role: mockUser.role,
-                provider: 'jwt'
-              }
-            });
-          }
+    if (!token) {
+      return new Response(
+        JSON.stringify({ error: 'Authentication required' }),
+        { 
+          status: 401,
+          headers: { 'Content-Type': 'application/json' }
         }
-        
-        // If a valid token but no matching user in dev mode, or in production
-        return NextResponse.json({
-          success: true,
-          message: 'Valid token, but no matching user',
-          user: {
-            id: payload.id,
-            email: payload.email,
-            role: payload.role,
-            provider: 'jwt'
-          }
-        });
-      }
+      );
     }
     
-    // No valid authentication found
-    return NextResponse.json({
-      success: false,
-      message: 'Not authenticated'
-    }, { status: 401 });
-  } catch (error) {
-    console.error('Error in /api/auth/me:', error);
+    // Verify token
+    const payload = await verifyJWTEdge(token);
     
-    // Return a generic error to avoid leaking implementation details
-    return NextResponse.json({
-      success: false,
-      message: 'Authentication error',
-      error: process.env.NODE_ENV === 'development' 
-        ? (error instanceof Error ? error.message : String(error))
-        : 'Server error'
-    }, { status: 500 });
+    if (!payload || !payload.sub) {
+      return new Response(
+        JSON.stringify({ error: 'Invalid token' }),
+        { 
+          status: 401,
+          headers: { 'Content-Type': 'application/json' }
+        }
+      );
+    }
+    
+    // Get user data
+    const prisma = await getNeonPrismaClient();
+    const user = await prisma.user.findUnique({
+      where: { id: payload.sub as string },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        createdAt: true,
+        updatedAt: true
+      }
+    });
+    
+    if (!user) {
+      return new Response(
+        JSON.stringify({ error: 'User not found' }),
+        { 
+          status: 404,
+          headers: { 'Content-Type': 'application/json' }
+        }
+      );
+    }
+    
+    // Return user information
+    return new Response(
+      JSON.stringify({ 
+        user,
+        sessionExpires: payload.exp ? new Date(payload.exp * 1000).toISOString() : null
+      }),
+      { 
+        status: 200,
+        headers: { 'Content-Type': 'application/json' }
+      }
+    );
+  } catch (error) {
+    console.error('Error in auth/me endpoint:', error);
+    
+    return new Response(
+      JSON.stringify({ 
+        error: 'Internal server error',
+        message: error instanceof Error ? error.message : 'Unknown error'
+      }),
+      { 
+        status: 500,
+        headers: { 'Content-Type': 'application/json' }
+      }
+    );
   }
 } 
