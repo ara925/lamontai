@@ -1,6 +1,112 @@
-import React from 'react';
+'use client';
+
+import React, { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
+import { getUserData } from '@/lib/auth-utils';
 
 export default function CompetitorsPage() {
+  const [competitors, setCompetitors] = useState<Array<{domain: string, name?: string}>>([]);
+  const [newCompetitor, setNewCompetitor] = useState('');
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [user, setUser] = useState<any>(null);
+  const router = useRouter();
+
+  useEffect(() => {
+    const fetchUserData = async () => {
+      try {
+        const userData = await getUserData();
+        if (userData) {
+          setUser(userData);
+          
+          // Pre-fill competitors if they exist
+          if (userData.settings && userData.settings.competitors) {
+            try {
+              // Check if it's already an array or needs to be parsed
+              const existingCompetitors = Array.isArray(userData.settings.competitors) 
+                ? userData.settings.competitors 
+                : JSON.parse(userData.settings.competitors);
+              setCompetitors(existingCompetitors);
+            } catch (e) {
+              console.error('Error parsing competitors:', e);
+            }
+          }
+        } else {
+          // Redirect to login if not authenticated
+          router.push('/auth/login');
+        }
+      } catch (error) {
+        console.error('Error fetching user data:', error);
+        router.push('/auth/login');
+      }
+    };
+
+    fetchUserData();
+  }, [router]);
+
+  const handleSubmit = async () => {
+    setIsLoading(true);
+    setError('');
+
+    try {
+      // Send data to the backend
+      const response = await fetch('/api/user/competitors', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        credentials: 'include',
+        body: JSON.stringify({ competitors }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.message || 'Failed to save competitors');
+      }
+
+      // Redirect to sitemap page (final step in onboarding)
+      router.push('/dashboard/sitemap');
+    } catch (err: any) {
+      setError(err.message || 'An error occurred. Please try again.');
+      console.error('Error saving competitors:', err);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const addCompetitor = () => {
+    if (newCompetitor.trim()) {
+      const domain = newCompetitor.trim().toLowerCase();
+      
+      // Check if already exists
+      if (competitors.some(c => c.domain.toLowerCase() === domain)) {
+        setError('This competitor is already in your list');
+        return;
+      }
+      
+      setCompetitors([...competitors, { domain }]);
+      setNewCompetitor('');
+      setError('');
+    }
+  };
+
+  const removeCompetitor = (domain: string) => {
+    setCompetitors(competitors.filter(c => c.domain !== domain));
+  };
+
+  const handleKeyPress = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addCompetitor();
+    }
+  };
+  
+  // Function to determine icon color class based on index
+  const getIconColorClass = (index: number) => {
+    const colors = ['blue', 'green', 'red', 'purple', 'yellow', 'indigo', 'pink'];
+    return colors[index % colors.length];
+  };
+
   return (
     <div className="space-y-8">
       <div className="flex items-center justify-between">
@@ -18,14 +124,26 @@ export default function CompetitorsPage() {
           <p className="text-sm">Find inspiration through competitor analysis</p>
         </div>
 
+        {error && (
+          <div className="mb-4 bg-red-50 border-l-4 border-red-500 p-4">
+            <p className="text-red-700 text-sm">{error}</p>
+          </div>
+        )}
+
         <div className="mb-6">
           <div className="relative">
             <input
               type="text"
+              value={newCompetitor}
+              onChange={(e) => setNewCompetitor(e.target.value)}
+              onKeyPress={handleKeyPress}
               placeholder="Type competitor domain (e.g. domain.com)"
               className="w-full rounded-md border border-gray-300 pl-3 pr-10 py-2 focus:border-orange-500 focus:outline-none focus:ring-1 focus:ring-orange-500"
             />
-            <button className="absolute inset-y-0 right-0 flex items-center px-3 text-gray-500">
+            <button 
+              onClick={addCompetitor} 
+              className="absolute inset-y-0 right-0 flex items-center px-3 text-gray-500 hover:text-gray-700"
+            >
               <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
                 <path fillRule="evenodd" d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" clipRule="evenodd" />
               </svg>
@@ -33,67 +151,44 @@ export default function CompetitorsPage() {
           </div>
         </div>
 
-        <div className="space-y-2">
-          <div className="flex items-center gap-2">
-            <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-blue-100 text-blue-800">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" />
-              </svg>
-            </span>
-            <span className="font-medium">example1.com</span>
-            <button className="ml-auto rounded-full p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-500">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-              </svg>
-            </button>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-green-100 text-green-800">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                <path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zM8 7a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7zM14 4a1 1 0 011-1h2a1 1 0 011 1v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V4z" />
-              </svg>
-            </span>
-            <span className="font-medium">example2.com</span>
-            <button className="ml-auto rounded-full p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-500">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-              </svg>
-            </button>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-red-100 text-red-800">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M3.172 5.172a4 4 0 015.656 0L10 6.343l1.172-1.171a4 4 0 115.656 5.656L10 17.657l-6.828-6.829a4 4 0 010-5.656z" clipRule="evenodd" />
-              </svg>
-            </span>
-            <span className="font-medium">example3.com</span>
-            <button className="ml-auto rounded-full p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-500">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-              </svg>
-            </button>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <span className="inline-flex h-6 w-6 items-center justify-center rounded-full bg-purple-100 text-purple-800">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
-                <path d="M5 3a2 2 0 00-2 2v2a2 2 0 002 2h2a2 2 0 002-2V5a2 2 0 00-2-2H5zM5 11a2 2 0 00-2 2v2a2 2 0 002 2h2a2 2 0 002-2v-2a2 2 0 00-2-2H5zM11 5a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2V5zM11 13a2 2 0 012-2h2a2 2 0 012 2v2a2 2 0 01-2 2h-2a2 2 0 01-2-2v-2z" />
-              </svg>
-            </span>
-            <span className="font-medium">example4.com</span>
-            <button className="ml-auto rounded-full p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-500">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
-                <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
-              </svg>
-            </button>
-          </div>
+        <div className="space-y-2 mb-8">
+          {competitors.length === 0 ? (
+            <div className="text-center py-4 text-gray-500">
+              No competitors found. Please add competitors manually.
+            </div>
+          ) : (
+            competitors.map((competitor, index) => (
+              <div key={index} className="flex items-center gap-2">
+                <span className={`inline-flex h-6 w-6 items-center justify-center rounded-full bg-${getIconColorClass(index)}-100 text-${getIconColorClass(index)}-800`}>
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" />
+                  </svg>
+                </span>
+                <span className="font-medium">{competitor.domain}</span>
+                <button 
+                  onClick={() => removeCompetitor(competitor.domain)}
+                  className="ml-auto rounded-full p-1 text-gray-400 hover:bg-gray-100 hover:text-gray-500"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                    <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                  </svg>
+                </button>
+              </div>
+            ))
+          )}
         </div>
 
         <div className="mt-8">
-          <button className="rounded-md bg-black px-8 py-2 text-sm font-medium text-white hover:bg-gray-800">
-            Continue
+          <button 
+            onClick={handleSubmit}
+            disabled={isLoading}
+            className={`rounded-md px-8 py-2 text-sm font-medium text-white ${
+              isLoading 
+                ? 'bg-gray-400 cursor-not-allowed' 
+                : 'bg-orange-500 hover:bg-orange-600'
+            }`}
+          >
+            {isLoading ? 'Saving...' : 'Continue to Dashboard'}
           </button>
         </div>
       </div>

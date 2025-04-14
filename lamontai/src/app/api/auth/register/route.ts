@@ -123,67 +123,31 @@ export async function POST(request: NextRequest) {
           data: {
             name,
             email,
-            password: hashedPassword,
-            ipAddress: ip,
+            password: hashedPassword
           },
         });
         
-        console.log(`API Register: [TX] User created with ID: ${newUser.id}`);
-        
-        // Create user settings
-        console.log('API Register: [TX] Creating settings...');
-        await tx.settings.create({
-          data: {
-            userId: newUser.id,
-          },
-        });
-        
-        console.log('API Register: [TX] Settings created.');
-        
-        // Find free plan
-        console.log('API Register: [TX] Finding Free plan...');
-        const freePlan = await tx.plan.findFirst({
-          where: { name: 'Free' },
-        });
-        
-        console.log(`API Register: [TX] Free plan found: ${!!freePlan}`);
-        
-        if (freePlan) {
-          // Create subscription
-          console.log('API Register: [TX] Creating subscription...');
-          await tx.subscription.create({
-            data: {
-              userId: newUser.id,
-              planId: freePlan.id,
-              status: 'active',
-              startDate: new Date(),
-            },
-          });
-          
-          console.log('API Register: [TX] Subscription created.');
-        }
+        console.log(`API Register: User created successfully`);
       });
-      
-      console.log(`API Register: Database transaction completed. User created successfully: ${email}`);
-    } catch (createError) {
-      console.error('API: Error creating user:', createError);
+    } catch (txError) {
+      console.error('API Register: Transaction error:', txError);
       return NextResponse.json(
         { 
           success: false,
-          message: 'Error creating user', 
-          error: 'An error occurred while creating your account.'
+          message: 'Transaction failed',
+          error: 'Could not complete the transaction'
         }, 
         { status: 500 }
       );
     }
     
-    // Create a new server-side session
+    // Create session
     let token;
     try {
       token = await createSession({
         id: newUser.id,
         email: newUser.email,
-        name: newUser.name,
+        name: newUser.name || '',
         role: newUser.role
       }, request);
       console.log(`API: Registration successful for ${email}, session created`);
@@ -229,25 +193,15 @@ export async function POST(request: NextRequest) {
     console.log(`API: Cookie set for ${email} - httpOnly: true`);
     
     return response;
-    
   } catch (error) {
-    console.error('Registration error:', error);
-    
+    console.error('API Register: Unexpected error:', error);
     return NextResponse.json(
       { 
         success: false,
-        message: 'An error occurred during registration',
+        message: 'An unexpected error occurred',
         error: error instanceof Error ? error.message : 'Unknown error'
       }, 
       { status: 500 }
     );
-  } finally {
-    // Close the database connection
-    try {
-      await db.$disconnect();
-      console.log('API: Database connection closed');
-    } catch (disconnectError) {
-      console.error('Error disconnecting from database:', disconnectError);
-    }
   }
-} 
+}

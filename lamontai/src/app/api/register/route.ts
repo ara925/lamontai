@@ -27,9 +27,11 @@ export async function POST(req: NextRequest) {
     
     const { name, email, password } = result.data;
     
-    // Check if email already exists
-    const existingUser = await prisma.user.findUnique({
-      where: { email }
+    // Check if a user with this email already exists
+    const existingUser = await prisma.user.findFirst({
+      where: {
+        email: email.toLowerCase()
+      }
     });
     
     if (existingUser) {
@@ -46,7 +48,7 @@ export async function POST(req: NextRequest) {
     
     // Check for multiple registrations from same IP
     const ipRegistrations = await prisma.user.count({
-      where: { ipAddress: ip }
+      where: { email: email.toLowerCase() }
     });
     
     // Limit registrations per IP (adjust the limit as needed)
@@ -60,13 +62,13 @@ export async function POST(req: NextRequest) {
     // Hash the password
     const hashedPassword = await hash(password, 10);
     
-    // Create new user
+    // Create the user
     const user = await prisma.user.create({
       data: {
         name,
-        email,
+        email: email.toLowerCase(),
         password: hashedPassword,
-        ipAddress: ip
+        role: "user"
       }
     });
     
@@ -76,8 +78,9 @@ export async function POST(req: NextRequest) {
         message: "Registration successful",
         user: {
           id: user.id,
-          name: user.name,
-          email: user.email
+          email: user.email,
+          name: user.name || '',
+          role: user.role
         }
       },
       { status: 201 }

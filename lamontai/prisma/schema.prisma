@@ -32,6 +32,14 @@ model Settings {
   language        String    @default("english")
   notifications   Boolean   @default(true)
   apiKey          String?
+  websiteUrl      String?
+  businessDescription String?
+  competitors     Json?
+  sitemapUrl      String?
+  hasGoogleSearchConsole Boolean @default(false)
+  googleSearchConsoleTokens String?
+  targetLanguages Json?     // Array of target languages for content
+  audienceSize    Int?      // Estimated audience size based on language selection
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 }

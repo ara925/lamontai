@@ -78,7 +78,17 @@ export async function getUserBySessionToken(token: string): Promise<SessionUser 
       },
     });
     
-    return user;
+    // Handle null name to satisfy SessionUser interface requirements
+    if (user) {
+      return {
+        id: user.id,
+        email: user.email,
+        name: user.name || '', // Convert null to empty string
+        role: user.role
+      };
+    }
+    
+    return null;
   } catch (error) {
     console.error('Error getting user by token:', error);
     return null;

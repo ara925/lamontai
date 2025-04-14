@@ -1,0 +1,36 @@
+<svg width="800" height="500" viewBox="0 0 800 500" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- World map made of dots - using a grid pattern -->
+  <defs>
+    <pattern id="dotsPattern" width="10" height="10" patternUnits="userSpaceOnUse">
+      <circle cx="5" cy="5" r="1.5" fill="#333" opacity="0.7" />
+    </pattern>
+  </defs>
+  
+  <!-- World map shape as a path filled with dots -->
+  <path d="M120,220 C150,200 200,180 250,190 C300,200 350,210 400,200 
+           C450,190 500,180 550,190 C600,200 650,220 700,210 
+           C700,210 700,300 650,320 C600,340 550,330 500,320 
+           C450,310 400,300 350,310 C300,320 250,330 200,320 
+           C150,310 120,290 120,220 Z" 
+           fill="url(#dotsPattern)" />
+           
+  <!-- North America -->
+  <path d="M150,150 C180,140 210,130 240,140 C270,150 300,160 280,180 
+           C260,200 240,190 220,180 C200,170 180,160 150,150 Z" 
+           fill="url(#dotsPattern)" />
+  
+  <!-- Europe -->
+  <path d="M400,150 C420,140 440,130 460,135 C480,140 500,150 490,170 
+           C480,190 460,195 440,190 C420,185 390,160 400,150 Z" 
+           fill="url(#dotsPattern)" />
+  
+  <!-- Asia -->
+  <path d="M500,140 C530,130 560,125 590,135 C620,145 650,160 640,180 
+           C630,200 600,210 570,200 C540,190 520,170 500,140 Z" 
+           fill="url(#dotsPattern)" />
+  
+  <!-- Australia -->
+  <path d="M600,350 C620,340 640,335 660,340 C680,345 690,355 685,370 
+           C680,385 660,390 640,385 C620,380 590,360 600,350 Z" 
+           fill="url(#dotsPattern)" />
+</svg> 

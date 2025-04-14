@@ -4,6 +4,11 @@ import {
   fetchWithTimeout,
   formatErrorMessage
 } from './api-config';
+import axios, { AxiosError, AxiosRequestConfig } from 'axios';
+import logger from './logger';
+import redisClient from './redis-client';
+import { createCircuitBreaker } from './redis/circuit-breaker';
+const cache = require('./redis/redis-cache');
 
 // Common types
 export type ApiResponse<T> = {
@@ -111,246 +116,161 @@ export interface UserProfile {
   };
 }
 
-/**
- * Content Generation API
- */
-export const ContentAPI = {
-  // Generate an article based on keywords and parameters
-  generateArticle: async (
-    topic: string,
-    keywords: string[],
-    options?: {
-      tone?: string;
-      length?: 'short' | 'medium' | 'long';
-      style?: string;
-    }
-  ): Promise<GeneratedContent> => {
-    try {
-      const response = await fetchWithTimeout(API_ENDPOINTS.GENERATE, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          topic,
-          keywords,
-          options: options || {}
-        }),
-      });
+const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3000/api';
 
-      const result = await handleApiResponse<ApiResponse<GeneratedContent>>(response);
-      return result.data!;
-    } catch (error) {
-      console.error('Error generating article:', error);
-      throw new Error(formatErrorMessage(error));
-    }
+// OpenAI API circuit breaker
+const openaiCircuitBreaker = createCircuitBreaker({
+  name: 'openai',
+  failureThreshold: 3,
+  resetTimeout: 60000, // 1 minute
+  fallbackFn: (endpoint: string, data: any) => {
+    console.log('Using fallback for OpenAI API call');
+    // Return a friendly error response
+    return { 
+      error: 'The AI service is currently unavailable. Please try again in a few minutes.' 
+    };
+  }
+}) as { fire: <T>(fn: () => Promise<T>) => Promise<T> };
+
+// Create an axios instance for API calls
+const api = axios.create({
+  baseURL: API_URL,
+  timeout: 30000, // 30 seconds
+  headers: {
+    'Content-Type': 'application/json',
   },
+});
 
-  // Analyze content for SEO optimization
-  analyzeContent: async (
-    content: string,
-    keywords: string[]
-  ): Promise<ContentAnalysis> => {
-    try {
-      const response = await fetchWithTimeout(API_ENDPOINTS.ANALYZE, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          content,
-          keywords
-        }),
-      });
-
-      const result = await handleApiResponse<ApiResponse<ContentAnalysis>>(response);
-      return result.data!;
-    } catch (error) {
-      console.error('Error analyzing content:', error);
-      throw new Error(formatErrorMessage(error));
+// Request interceptor for authentication
+api.interceptors.request.use(
+  (config) => {
+    // Add JWT token to request headers if available
+    const token = typeof window !== 'undefined' 
+      ? localStorage.getItem('jwt') 
+      : null;
+    
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
     }
+    
+    return config;
   },
+  (error) => {
+    return Promise.reject(error);
+  }
+);
 
-  // Analyze a URL for SEO optimization
-  analyzeUrl: async (
-    url: string,
-    keywords: string[]
-  ): Promise<ContentAnalysis> => {
-    try {
-      const response = await fetchWithTimeout(API_ENDPOINTS.ANALYZE, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          url,
-          keywords
-        }),
-      });
+// Helper function to make API requests with circuit breaker and caching
+async function apiRequest(
+  method: string,
+  endpoint: string,
+  data?: any,
+  useCircuitBreaker = false,
+  useCache = false,
+  cacheTtl = 3600
+) {
+  const config: AxiosRequestConfig = {
+    method,
+    url: endpoint,
+    ...(method === 'get' ? { params: data } : { data }),
+  };
 
-      const result = await handleApiResponse<ApiResponse<ContentAnalysis>>(response);
-      return result.data!;
-    } catch (error) {
-      console.error('Error analyzing URL:', error);
-      throw new Error(formatErrorMessage(error));
+  // Check cache for GET requests
+  if (method.toLowerCase() === 'get' && useCache) {
+    const cacheKey = `api:${endpoint}:${JSON.stringify(data || {})}`;
+    const cachedData = await cache.get(cacheKey);
+    
+    if (cachedData) {
+      console.log(`Cache hit for ${cacheKey}`);
+      return cachedData;
     }
-  },
+  }
+
+  try {
+    // Use circuit breaker for external API calls that may fail
+    const response = useCircuitBreaker
+      ? await openaiCircuitBreaker.fire(async () => await api(config))
+      : await api(config);
+
+    // Cache successful GET responses
+    if (method.toLowerCase() === 'get' && useCache && response.data) {
+      const cacheKey = `api:${endpoint}:${JSON.stringify(data || {})}`;
+      await cache.set(cacheKey, response.data, cacheTtl);
+    }
+
+    return response.data;
+  } catch (error: any) {
+    console.error(`API request error for ${endpoint}:`, error.message);
+    
+    // Format error response
+    if (error.response) {
+      // Server responded with a status code outside of 2xx
+      throw { 
+        status: error.response.status,
+        message: error.response.data.message || 'An error occurred with the API request',
+        data: error.response.data 
+      };
+    } else if (error.request) {
+      // Request was made but no response received
+      throw { 
+        status: 503,
+        message: 'No response from server. Please try again later.' 
+      };
+    } else {
+      // Error setting up the request
+      throw { 
+        status: 500,
+        message: error.message || 'An unexpected error occurred' 
+      };
+    }
+  }
+}
+
+// API service methods
+export const ApiService = {
+  // Article generation
+  generateArticle: (data: any) => 
+    apiRequest('post', '/generate', data, true),
+  
+  // Keyword research  
+  researchKeywords: (query: string) => 
+    apiRequest('get', '/keywords', { query }, true, true, 24 * 3600), // Cache for 24 hours
+  
+  // Content analysis
+  analyzeContent: (url: string) =>
+    apiRequest('get', '/analyze', { url }, true, true, 12 * 3600), // Cache for 12 hours
+  
+  // Get user data
+  getCurrentUser: () => 
+    apiRequest('get', '/auth/me'),
+  
+  // Authentication
+  login: (credentials: { email: string; password: string }) =>
+    apiRequest('post', '/auth/login', credentials),
+  
+  register: (userData: any) =>
+    apiRequest('post', '/auth/register', userData),
+  
+  // Content management
+  getArticles: (params?: any) =>
+    apiRequest('get', '/articles', params, false, true),
+  
+  getArticleById: (id: string) =>
+    apiRequest('get', `/articles/${id}`, null, false, true),
+  
+  createArticle: (article: any) =>
+    apiRequest('post', '/articles', article),
+  
+  updateArticle: (id: string, article: any) =>
+    apiRequest('put', `/articles/${id}`, article),
+  
+  deleteArticle: (id: string) =>
+    apiRequest('delete', `/articles/${id}`),
+  
+  // Clear cache for specific endpoints
+  clearCache: async (prefix: string) => {
+    return await cache.clearByPrefix(`api:${prefix}`);
+  }
 };
 
-/**
- * Keyword Research API
- */
-export const KeywordAPI = {
-  // Research keywords related to a main keyword
-  researchKeywords: async (
-    query: string,
-    options?: {
-      limit?: number;
-      country?: string;
-      language?: string;
-    }
-  ): Promise<KeywordResults> => {
-    try {
-      const response = await fetchWithTimeout(API_ENDPOINTS.KEYWORDS, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          query,
-          options: options || {}
-        }),
-      });
-
-      const result = await handleApiResponse<ApiResponse<KeywordResults>>(response);
-      return result.data!;
-    } catch (error) {
-      console.error('Error researching keywords:', error);
-      throw new Error(formatErrorMessage(error));
-    }
-  },
-};
-
-/**
- * Articles API
- */
-export const ArticleAPI = {
-  // Get all articles for the current user
-  getArticles: async (
-    filters?: { status?: 'draft' | 'published' | 'archived' }
-  ): Promise<Article[]> => {
-    try {
-      let url = API_ENDPOINTS.ARTICLES;
-      
-      if (filters?.status) {
-        url += `?status=${filters.status}`;
-      }
-      
-      const response = await fetchWithTimeout(url, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-      });
-
-      const result = await handleApiResponse<ApiResponse<Article[]>>(response);
-      return result.data || [];
-    } catch (error) {
-      console.error('Error fetching articles:', error);
-      throw new Error(formatErrorMessage(error));
-    }
-  },
-
-  // Get a specific article by ID
-  getArticle: async (id: string): Promise<Article> => {
-    try {
-      const response = await fetchWithTimeout(`${API_ENDPOINTS.ARTICLES}/${id}`, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-      });
-
-      const result = await handleApiResponse<ApiResponse<Article>>(response);
-      return result.data!;
-    } catch (error) {
-      console.error(`Error fetching article ${id}:`, error);
-      throw new Error(formatErrorMessage(error));
-    }
-  },
-
-  // Create a new article
-  createArticle: async (articleData: Partial<Article>): Promise<Article> => {
-    try {
-      const response = await fetchWithTimeout(API_ENDPOINTS.ARTICLES, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(articleData),
-      });
-
-      const result = await handleApiResponse<ApiResponse<Article>>(response);
-      return result.data!;
-    } catch (error) {
-      console.error('Error creating article:', error);
-      throw new Error(formatErrorMessage(error));
-    }
-  },
-
-  // Update an existing article
-  updateArticle: async (id: string, updates: Partial<Article>): Promise<Article> => {
-    try {
-      const response = await fetchWithTimeout(`${API_ENDPOINTS.ARTICLES}/${id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
-      });
-
-      const result = await handleApiResponse<ApiResponse<Article>>(response);
-      return result.data!;
-    } catch (error) {
-      console.error(`Error updating article ${id}:`, error);
-      throw new Error(formatErrorMessage(error));
-    }
-  },
-
-  // Delete an article
-  deleteArticle: async (id: string): Promise<void> => {
-    try {
-      const response = await fetchWithTimeout(`${API_ENDPOINTS.ARTICLES}/${id}`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-      });
-
-      await handleApiResponse(response);
-    } catch (error) {
-      console.error(`Error deleting article ${id}:`, error);
-      throw new Error(formatErrorMessage(error));
-    }
-  },
-};
-
-/**
- * User API
- */
-export const UserAPI = {
-  // Get user profile
-  getProfile: async (): Promise<UserProfile> => {
-    try {
-      const response = await fetchWithTimeout(API_ENDPOINTS.USER_PROFILE, {
-        method: 'GET',
-        headers: { 'Content-Type': 'application/json' },
-      });
-
-      const result = await handleApiResponse<ApiResponse<UserProfile>>(response);
-      return result.data!;
-    } catch (error) {
-      console.error('Error fetching user profile:', error);
-      throw new Error(formatErrorMessage(error));
-    }
-  },
-
-  // Update user profile
-  updateProfile: async (updates: Partial<UserProfile>): Promise<UserProfile> => {
-    try {
-      const response = await fetchWithTimeout(API_ENDPOINTS.USER_PROFILE, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(updates),
-      });
-
-      const result = await handleApiResponse<ApiResponse<UserProfile>>(response);
-      return result.data!;
-    } catch (error) {
-      console.error('Error updating user profile:', error);
-      throw new Error(formatErrorMessage(error));
-    }
-  },
-}; 
+export default ApiService; 

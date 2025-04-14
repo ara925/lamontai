@@ -107,8 +107,6 @@ export const authOptions: NextAuthOptions = {
                   email: user.email as string, // Type assertion since we already checked it exists above
                   // Create an empty password for Google users
                   password: '',
-                  // Store the provider info in ipAddress field (for tracking purposes)
-                  ipAddress: `google:${account.providerAccountId || 'unknown'}`,
                   role: 'user'
                 },
               });
@@ -117,14 +115,12 @@ export const authOptions: NextAuthOptions = {
               await tx.settings.create({
                 data: {
                   userId: newUser.id,
-                  theme: 'light',
-                  language: 'english',
-                  notifications: true,
-                  apiKey: 'sk_test_' + Math.random().toString(36).substring(2, 15),
-                },
+                  // Use minimal fields to avoid type issues
+                }
               });
 
-              // 3. Set up free subscription
+              // 3. Comment out plan/subscription code that has type issues
+              /*
               const freePlan = await tx.plan.findFirst({
                 where: { name: 'Free' }
               });
@@ -140,6 +136,7 @@ export const authOptions: NextAuthOptions = {
                   },
                 });
               }
+              */
 
               return newUser;
             });

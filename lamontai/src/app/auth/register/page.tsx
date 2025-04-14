@@ -211,14 +211,14 @@ export default function RegisterPage() {
         const userData = data.data.user || data.data;
         setUserData(userData);
         
-        // Get return URL from query params or default to dashboard
-        const returnUrl = searchParams?.get('returnUrl') || '/dashboard';
+        // Redirect to website URL confirmation page instead of dashboard
+        const returnUrl = searchParams?.get('returnUrl') || '/onboarding/website-url';
         
         // Show success message
         setGeneralError('');
         console.log(`[RegisterPage handleSubmit] Redirecting to: ${returnUrl}`);
         
-        // Redirect to dashboard or return URL
+        // Redirect to onboarding or return URL
         setTimeout(() => {
           console.log('[RegisterPage handleSubmit] Executing redirect');
           window.location.href = returnUrl;
@@ -245,7 +245,7 @@ export default function RegisterPage() {
       
       // Call NextAuth signIn with Google provider
       const result = await signIn('google', { 
-        callbackUrl: '/dashboard',
+        callbackUrl: '/onboarding/website-url',
         redirect: true // Let NextAuth handle the redirect
       });
       

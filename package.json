@@ -1,13 +1,16 @@
 {
   "devDependencies": {
-    "@types/jsonwebtoken": "^9.0.9"
+    "@types/jsonwebtoken": "^9.0.9",
+    "@types/winston": "^2.4.4",
+    "@types/xml2js": "^0.4.14"
   },
   "dependencies": {
     "@types/file-saver": "^2.0.7",
     "axios": "^1.8.4",
     "file-saver": "^2.0.5",
     "jose": "^6.0.10",
-    "puppeteer": "^24.6.1"
+    "puppeteer": "^24.6.1",
+    "xml2js": "^0.6.2"
   },
   "scripts": {
     "frontend": "cd lamontai && npm run dev",

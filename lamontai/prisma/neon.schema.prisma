@@ -1,0 +1,92 @@
+// This file configures Prisma for Neon PostgreSQL on Cloudflare
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+generator client {
+  provider        = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+}
+
+// User model
+model User {
+  id               String         @id @default(cuid())
+  name             String?
+  email            String         @unique
+  emailVerified    DateTime?
+  password         String
+  image            String?
+  role             String         @default("user")
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+  settings         Settings?
+  subscription     Subscription?
+  articles         Article[]
+  contentGenerations ContentGeneration[]
+  sessions         Session[]
+}
+
+// Settings model
+model Settings {
+  id                     String   @id @default(cuid())
+  userId                 String   @unique
+  user                   User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  websiteUrl             String?
+  businessDescription    String?
+  competitors            String?
+  sitemapUrl             String?
+  hasGoogleSearchConsole Boolean  @default(false)
+  googleSearchConsoleTokens Json?
+}
+
+// Subscription model
+model Subscription {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  planId    String
+  status    String   @default("active")
+  startDate DateTime @default(now())
+  endDate   DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// Article model
+model Article {
+  id               String   @id @default(cuid())
+  title            String
+  slug             String?
+  snippet          String?
+  content          String
+  keywords         String[]
+  status           String   @default("draft")
+  wordCount        Int?
+  seoScore         Int?
+  readabilityScore Int?
+  userId           String
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+// Content Generation tracking
+model ContentGeneration {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  topic     String
+  keywords  String[]
+  createdAt DateTime @default(now())
+}
+
+// Session model for authentication
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+} 

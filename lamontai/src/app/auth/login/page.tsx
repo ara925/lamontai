@@ -79,9 +79,10 @@ export default function LoginPage() {
           role: session.user.role || 'user'
         });
         
-        // Get return URL from query params or default to dashboard
-        const returnUrl = searchParams?.get('returnUrl') || '/dashboard';
-        console.log('Redirecting to:', returnUrl);
+        // For OAuth login, redirect to a handler that will check both onboarding steps
+        // This endpoint should check for website URL and business description completion
+        const returnUrl = searchParams?.get('returnUrl') || '/auth/check-onboarding';
+        console.log('Redirecting to check complete onboarding status:', returnUrl);
         
         // Use a direct location change instead of router.push to avoid Next.js routing issues
         setTimeout(() => {
@@ -148,9 +149,52 @@ export default function LoginPage() {
         const userData = data.data.user || data.data;
         setUserData(userData);
         
-        // Get return URL from query params or default to dashboard
-        const returnUrl = searchParams?.get('returnUrl') || '/dashboard';
-        console.log('Redirecting to:', returnUrl);
+        // Check user's onboarding progress
+        const hasWebsiteUrl = userData.settings && userData.settings.websiteUrl;
+        const hasBusinessDescription = userData.settings && userData.settings.businessDescription;
+        const hasCompetitors = userData.settings && userData.settings.competitors && 
+                               Array.isArray(userData.settings.competitors) && 
+                               userData.settings.competitors.length > 0;
+        const hasSitemapUrl = userData.settings && userData.settings.sitemapUrl !== undefined;
+        const hasGoogleSearchConsole = userData.settings && userData.settings.hasGoogleSearchConsole !== undefined;
+        const hasTargetAudience = userData.settings && userData.settings.targetLanguages !== undefined;
+        
+        // Determine redirect path based on onboarding progress
+        let redirectPath;
+        if (!hasWebsiteUrl) {
+          // First step: Website URL configuration
+          redirectPath = '/onboarding/website-url';
+        } else if (!hasBusinessDescription) {
+          // Second step: Business description (UI shows as "Step 1")
+          redirectPath = '/onboarding/business-description';
+        } else if (!hasCompetitors) {
+          // Third step: Competitors selection (UI shows as "Step 2")
+          redirectPath = '/onboarding/competitors';
+        } else if (!hasSitemapUrl) {
+          // Fourth step: Sitemap URL (UI shows as "Step 3", optional but always show the page)
+          redirectPath = '/onboarding/sitemap';
+        } else if (!hasGoogleSearchConsole) {
+          // Fifth step: Google Search Console (UI shows as "Step 4", optional but always show the page)
+          redirectPath = '/onboarding/google-search-console';
+        } else if (!hasTargetAudience) {
+          // Sixth step: Target audience (UI shows as "Last Step")
+          redirectPath = '/onboarding/target-audience';
+        } else {
+          // All onboarding complete
+          redirectPath = '/dashboard';
+        }
+        
+        const returnUrl = searchParams?.get('returnUrl') || redirectPath;
+        
+        console.log(`Redirecting to: ${returnUrl} (Onboarding status: ${
+          !hasWebsiteUrl ? 'needs website URL' : 
+          !hasBusinessDescription ? 'needs business description' : 
+          !hasCompetitors ? 'needs competitors' : 
+          !hasSitemapUrl ? 'needs sitemap URL' : 
+          !hasGoogleSearchConsole ? 'needs Google Search Console' :
+          !hasTargetAudience ? 'needs target audience' :
+          'completed'
+        })`);
         
         // Use a direct location change instead of router.push to avoid Next.js routing issues
         setTimeout(() => {
@@ -176,14 +220,14 @@ export default function LoginPage() {
     setLoginAttempted(true);
     
     try {
-      // Get return URL from query params or default to dashboard
-      const returnUrl = searchParams?.get('returnUrl') || '/dashboard';
+      // When using Google sign-in, redirect to onboarding check
+      const returnUrl = searchParams?.get('returnUrl') || '/auth/check-onboarding';
       console.log('Google sign-in, will redirect to:', returnUrl);
       
       // Call NextAuth signIn with Google provider
       const result = await signIn('google', { 
         callbackUrl: returnUrl,
-        redirect: true // Changed to true to let NextAuth handle the redirect
+        redirect: true
       });
       
       console.log('Google sign-in result:', result);

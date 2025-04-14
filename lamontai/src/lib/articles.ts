@@ -106,13 +106,88 @@ export const downloadArticle = (article: Article) => {
   saveAs(blob, `article-${article.id}-${new Date().getTime()}.txt`);
 };
 
-// Connect to Google Search Console (simulated)
-export const connectGoogleSearchConsole = async (): Promise<{ success: boolean }> => {
-  // In a real app, this would initiate OAuth flow
-  // For demo purposes, we'll simulate a successful connection
-  return new Promise(resolve => {
-    setTimeout(() => {
-      resolve({ success: true });
-    }, 1500);
-  });
+// Connect to Google Search Console via OAuth
+export const connectGoogleSearchConsole = async (): Promise<{ success: boolean, error?: string }> => {
+  try {
+    // Google OAuth config - these should be environment variables in production
+    const googleClientId = process.env.GOOGLE_CLIENT_ID;
+    const googleClientSecret = process.env.GOOGLE_CLIENT_SECRET;
+    const redirectUri = `${window.location.origin}/api/auth/callback/google-search-console`;
+    
+    if (!googleClientId) {
+      throw new Error('Google Client ID is not configured');
+    }
+    
+    // Define OAuth scopes for Google Search Console
+    const scopes = [
+      'https://www.googleapis.com/auth/webmasters.readonly', // Read-only access to Search Console
+      'https://www.googleapis.com/auth/webmasters', // Read-write access to Search Console
+    ];
+    
+    // Generate state parameter for security
+    const state = Math.random().toString(36).substring(2, 15);
+    sessionStorage.setItem('googleSearchConsoleState', state);
+    
+    // Build the authorization URL
+    const authUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+    authUrl.searchParams.append('client_id', googleClientId);
+    authUrl.searchParams.append('redirect_uri', redirectUri);
+    authUrl.searchParams.append('response_type', 'code');
+    authUrl.searchParams.append('scope', scopes.join(' '));
+    authUrl.searchParams.append('access_type', 'offline');
+    authUrl.searchParams.append('state', state);
+    authUrl.searchParams.append('prompt', 'consent');
+    
+    // Open the OAuth consent screen in a new window
+    const authWindow = window.open(authUrl.toString(), 'googleOAuth', 
+      'width=600,height=600,menubar=no,toolbar=no,location=no,status=no');
+    
+    if (!authWindow) {
+      throw new Error('Popup blocked. Please allow popups for this site.');
+    }
+    
+    // Listen for the OAuth callback
+    return new Promise((resolve) => {
+      // Function to handle message from popup
+      const handleMessage = (event: MessageEvent) => {
+        // Verify the origin of the message
+        if (event.origin !== window.location.origin) return;
+        
+        // Check if this is our OAuth callback
+        if (event.data && event.data.type === 'GOOGLE_SEARCH_CONSOLE_AUTH') {
+          window.removeEventListener('message', handleMessage);
+          
+          if (event.data.success) {
+            resolve({ success: true });
+          } else {
+            resolve({ 
+              success: false, 
+              error: event.data.error || 'Authentication failed' 
+            });
+          }
+        }
+      };
+      
+      // Listen for messages from the popup
+      window.addEventListener('message', handleMessage);
+      
+      // Handle case where user closes the popup without completing auth
+      const checkPopupClosed = setInterval(() => {
+        if (authWindow.closed) {
+          clearInterval(checkPopupClosed);
+          window.removeEventListener('message', handleMessage);
+          resolve({ 
+            success: false, 
+            error: 'Authentication cancelled' 
+          });
+        }
+      }, 500);
+    });
+  } catch (error) {
+    console.error('Error initiating Google Search Console OAuth:', error);
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : 'Unknown error occurred'
+    };
+  }
 }; 

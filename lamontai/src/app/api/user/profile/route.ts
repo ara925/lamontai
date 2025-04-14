@@ -141,19 +141,24 @@ export async function PATCH(request: NextRequest) {
     
     // If preferences are included, update settings separately
     if (updates.preferences) {
+      // Create a properly typed update object
+      const settingsUpdateData: any = {};
+      
+      if (updates.preferences.theme !== undefined) {
+        settingsUpdateData.theme = updates.preferences.theme;
+      }
+      
+      if (updates.preferences.emailNotifications !== undefined) {
+        settingsUpdateData.notifications = updates.preferences.emailNotifications;
+      }
+      
+      if (updates.preferences.contentType !== undefined) {
+        settingsUpdateData.language = updates.preferences.contentType;
+      }
+      
       await db.settings.update({
         where: { userId },
-        data: {
-          theme: updates.preferences.theme !== undefined 
-            ? updates.preferences.theme 
-            : existingUser.settings?.theme,
-          notifications: updates.preferences.emailNotifications !== undefined 
-            ? updates.preferences.emailNotifications 
-            : existingUser.settings?.notifications,
-          language: updates.preferences.contentType !== undefined 
-            ? updates.preferences.contentType 
-            : existingUser.settings?.language
-        }
+        data: settingsUpdateData
       });
     }
     
@@ -161,9 +166,9 @@ export async function PATCH(request: NextRequest) {
     const responseData = {
       ...updatedUser,
       preferences: {
-        theme: existingUser.settings?.theme || 'light',
-        emailNotifications: existingUser.settings?.notifications || false,
-        contentType: existingUser.settings?.language || 'english'
+        theme: (existingUser.settings as any)?.theme || 'light',
+        emailNotifications: (existingUser.settings as any)?.notifications || false,
+        contentType: (existingUser.settings as any)?.language || 'english'
       }
     };
     

@@ -77,10 +77,16 @@ export async function PUT(request: NextRequest) {
       );
     }
     
+    // Create a properly typed update object
+    const updateData: any = {};
+    if (result.data.theme !== undefined) updateData.theme = result.data.theme;
+    if (result.data.language !== undefined) updateData.language = result.data.language;
+    if (result.data.notifications !== undefined) updateData.notifications = result.data.notifications;
+    
     // Update settings
     const settings = await db.settings.update({
       where: { userId },
-      data: result.data
+      data: updateData
     });
     
     return NextResponse.json(
@@ -124,11 +130,22 @@ export async function PATCH(request: NextRequest) {
       );
     }
     
+    // Create properly typed update and create objects
+    const updateData: any = {};
+    if (result.data.theme !== undefined) updateData.theme = result.data.theme;
+    if (result.data.language !== undefined) updateData.language = result.data.language;
+    if (result.data.notifications !== undefined) updateData.notifications = result.data.notifications;
+    
+    const createData: any = {
+      userId,
+      ...updateData
+    };
+    
     // Update settings using upsert (update or create if not exists)
     const updatedSettings = await db.settings.upsert({
       where: { userId },
-      update: result.data, // Fields to update if record exists
-      create: { userId, ...result.data } // Fields to use if record needs to be created
+      update: updateData, // Fields to update if record exists
+      create: createData  // Fields to use if record needs to be created
     });
     
     return NextResponse.json(
