@@ -1,85 +1,187 @@
 /**
- * Edge-compatible Redis client mock
- * This mock provides the same interface as the regular Redis client but works in Edge environments
- * without node.js dependencies.
+ * Edge-compatible Redis client wrapper
+ * This file provides a stubbed Redis client for Edge environments
+ * that is API-compatible with the full Redis client but operates
+ * differently in Edge environments.
  */
 
-import { IRedisClient } from './redis-client';
+import { kv } from '@vercel/kv';
 
-interface CacheEntry<T> {
-  value: T;
-  expiry: number;
-}
+// Simple in-memory fallback when kv is not available
+const memoryCache: Record<string, { value: any; expiry: number }> = {};
 
-// In-memory cache for Edge runtime
-const memoryCache: Record<string, CacheEntry<any>> = {};
+// Default TTL
+const DEFAULT_CACHE_TTL = 12 * 60 * 60; // 12 hours in seconds
 
-/**
- * Edge-compatible Redis client class
- */
-class EdgeRedisClient implements IRedisClient {
-  /**
-   * Always returns false for Edge environments
-   */
-  public isAlive(): boolean {
-    return false;
-  }
+class EdgeRedisClient {
+  private static instance: EdgeRedisClient | null = null;
+  private redisClient: any = null;
+  private isEdgeEnvironment: boolean;
 
-  /**
-   * Store value in memory cache with expiration
-   */
-  public async set(key: string, value: any, ttl = 43200): Promise<void> {
-    try {
-      memoryCache[key] = {
-        value,
-        expiry: Date.now() + ttl * 1000,
-      };
-    } catch (error) {
-      console.error(`Error setting cache key ${key}:`, error);
+  private constructor() {
+    // Check if we're in an edge environment
+    this.isEdgeEnvironment = typeof process.env.NEXT_PUBLIC_CLOUDFLARE_ENABLED !== 'undefined' &&
+      process.env.NEXT_PUBLIC_CLOUDFLARE_ENABLED === 'true';
+    
+    // Initialize the KV client if we're in an edge environment
+    if (this.isEdgeEnvironment && typeof kv !== 'undefined') {
+      this.redisClient = kv;
+    } else {
+      // In non-edge environments, this client will not be used
+      // The regular redis-client.ts will be imported instead
+      console.warn('EdgeRedisClient initialized in a non-edge environment.');
     }
   }
 
+  public static getInstance(): EdgeRedisClient {
+    if (!EdgeRedisClient.instance) {
+      EdgeRedisClient.instance = new EdgeRedisClient();
+    }
+    return EdgeRedisClient.instance;
+  }
+
   /**
-   * Get value from memory cache
+   * Check if the client is alive and connected
    */
-  public async get<T>(key: string): Promise<T | null> {
-    try {
-      if (memoryCache[key]) {
-        // Check if value has expired
-        if (memoryCache[key].expiry > Date.now()) {
-          return memoryCache[key].value as T;
-        }
-        // Clean up expired item
-        delete memoryCache[key];
+  isAlive(): boolean {
+    return this.redisClient !== null;
+  }
+
+  /**
+   * Get a value from Redis
+   */
+  async get<T>(key: string): Promise<T | null> {
+    if (!this.redisClient) {
+      // Use memory fallback when KV is not available
+      if (memoryCache[key] && memoryCache[key].expiry > Date.now()) {
+        return memoryCache[key].value as T;
       }
-      
       return null;
+    }
+    
+    try {
+      return await this.redisClient.get(key);
     } catch (error) {
-      console.error(`Error getting cache key ${key}:`, error);
+      console.error('EdgeRedisClient get error:', error);
+      // Try memory cache as fallback
+      if (memoryCache[key] && memoryCache[key].expiry > Date.now()) {
+        return memoryCache[key].value as T;
+      }
       return null;
     }
   }
 
   /**
-   * Delete key from memory cache
+   * Set a value in Redis
    */
-  public async delete(key: string): Promise<void> {
+  async set<T>(key: string, value: T, ttl = DEFAULT_CACHE_TTL): Promise<void> {
+    // Also store in memory cache for fallback
+    memoryCache[key] = { 
+      value, 
+      expiry: Date.now() + (ttl * 1000)
+    };
+    
+    if (!this.redisClient) return;
+    
     try {
-      if (memoryCache[key]) {
-        delete memoryCache[key];
+      if (ttl) {
+        await this.redisClient.set(key, value, { ex: ttl });
+      } else {
+        await this.redisClient.set(key, value);
       }
     } catch (error) {
-      console.error(`Error deleting cache key ${key}:`, error);
+      console.error('EdgeRedisClient set error:', error);
     }
   }
 
   /**
-   * Get cache with automatic refresh from source function
+   * Delete a key from Redis
    */
-  public async getOrSet<T>(
+  async del(key: string): Promise<number> {
+    // Also remove from memory cache
+    delete memoryCache[key];
+    
+    if (!this.redisClient) return 0;
+    
+    try {
+      return await this.redisClient.del(key);
+    } catch (error) {
+      console.error('EdgeRedisClient del error:', error);
+      return 0;
+    }
+  }
+  
+  /**
+   * Delete a key from Redis (alias for del)
+   */
+  async delete(key: string): Promise<void> {
+    await this.del(key);
+  }
+
+  /**
+   * Check if a key exists in Redis
+   */
+  async exists(key: string): Promise<number> {
+    // Check memory cache first
+    if (memoryCache[key] && memoryCache[key].expiry > Date.now()) {
+      return 1;
+    }
+    
+    if (!this.redisClient) return 0;
+    
+    try {
+      return await this.redisClient.exists(key);
+    } catch (error) {
+      console.error('EdgeRedisClient exists error:', error);
+      return 0;
+    }
+  }
+
+  /**
+   * Set expiry time on a key
+   */
+  async expire(key: string, seconds: number): Promise<number> {
+    // Update memory cache expiry
+    if (memoryCache[key]) {
+      memoryCache[key].expiry = Date.now() + (seconds * 1000);
+    }
+    
+    if (!this.redisClient) return 0;
+    
+    try {
+      return await this.redisClient.expire(key, seconds);
+    } catch (error) {
+      console.error('EdgeRedisClient expire error:', error);
+      return 0;
+    }
+  }
+
+  /**
+   * Get all keys matching a pattern
+   */
+  async keys(pattern: string): Promise<string[]> {
+    if (!this.redisClient) {
+      // Simple pattern matching for memory cache
+      return Object.keys(memoryCache).filter(key => 
+        key.includes(pattern.replace('*', ''))
+      );
+    }
+    
+    try {
+      return await this.redisClient.keys(pattern);
+    } catch (error) {
+      console.error('EdgeRedisClient keys error:', error);
+      return [];
+    }
+  }
+
+  /**
+   * Get or set a value with a fetcher function
+   */
+  async getOrSet<T>(
     key: string,
     fetchFn: () => Promise<T>,
-    ttl = 43200
+    ttl = DEFAULT_CACHE_TTL
   ): Promise<T> {
     // Try to get from cache first
     const cachedValue = await this.get<T>(key);
@@ -92,8 +194,10 @@ class EdgeRedisClient implements IRedisClient {
     try {
       const freshValue = await fetchFn();
       
-      // Store in cache
-      await this.set(key, freshValue, ttl);
+      // Store in cache (only if value is not null/undefined)
+      if (freshValue !== null && freshValue !== undefined) {
+        await this.set(key, freshValue, ttl);
+      }
       
       return freshValue;
     } catch (error) {
@@ -105,13 +209,28 @@ class EdgeRedisClient implements IRedisClient {
   /**
    * Clear memory cache
    */
-  public clearMemoryCache(): void {
+  clearMemoryCache(): void {
     Object.keys(memoryCache).forEach((key) => {
       delete memoryCache[key];
     });
   }
+
+  /**
+   * Close the Redis connection
+   */
+  async quit(): Promise<'OK'> {
+    if (!this.redisClient) return 'OK';
+    
+    try {
+      // Do nothing in Edge runtime
+      return 'OK';
+    } catch (error) {
+      console.error('EdgeRedisClient quit error:', error);
+      return 'OK';
+    }
+  }
 }
 
-// Export singleton instance
-const edgeRedisClient = new EdgeRedisClient();
+// Export a singleton instance
+const edgeRedisClient = EdgeRedisClient.getInstance();
 export default edgeRedisClient; 

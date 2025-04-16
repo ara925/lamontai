@@ -4,6 +4,9 @@ const webpack = require('webpack');
 // Check if we're running in a CI environment
 const isCI = process.env.CI === 'true' || process.env.GITHUB_ACTIONS === 'true';
 
+// Check if this is a Cloudflare build
+const isCloudflare = process.env.NEXT_PUBLIC_DEPLOY_ENV === 'cloudflare';
+
 const nextConfig = {
   reactStrictMode: true,
   swcMinify: true,
@@ -31,8 +34,16 @@ const nextConfig = {
     esmExternals: true,
     // Enable instrumentation (performance monitoring)
     instrumentationHook: true,
-    // Adjust as needed for your project
-    serverComponentsExternalPackages: ['winston', 'bcryptjs', 'ioredis', 'winston-daily-rotate-file'],
+    // Adjust as needed for your project - packages that use Node.js APIs
+    serverComponentsExternalPackages: [
+      'winston', 
+      'bcryptjs', 
+      'ioredis', 
+      'redis-errors',
+      'winston-daily-rotate-file',
+      'cluster',
+      'redis'
+    ],
   },
   
   // Handle specific route exclusions for Cloudflare
@@ -118,8 +129,6 @@ const nextConfig = {
   
   // Override routes with custom configurations
   async rewrites() {
-    const isCloudflare = process.env.NEXT_PUBLIC_DEPLOY_ENV === 'cloudflare';
-    
     if (isCloudflare) {
       return [
         // Prevent problematic routes from being accessed directly
@@ -141,8 +150,8 @@ const nextConfig = {
       },
     ],
     // Configure Cloudflare Images support
-    loader: process.env.NEXT_PUBLIC_DEPLOY_ENV === 'cloudflare' ? 'custom' : undefined,
-    loaderFile: process.env.NEXT_PUBLIC_DEPLOY_ENV === 'cloudflare' ? './src/lib/cloudflare-image-loader.js' : undefined,
+    loader: isCloudflare ? 'custom' : undefined,
+    loaderFile: isCloudflare ? './src/lib/cloudflare-image-loader.js' : undefined,
     domains: ['images.unsplash.com', 'via.placeholder.com'],
     formats: ['image/avif', 'image/webp'],
   },
@@ -169,7 +178,7 @@ const nextConfig = {
 }
 
 // Check for Edge Runtime configuration
-if (process.env.NEXT_PUBLIC_DEPLOY_ENV === 'cloudflare') {
+if (isCloudflare) {
   // Additional Cloudflare-specific settings
   nextConfig.experimental = {
     ...nextConfig.experimental,

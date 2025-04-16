@@ -1,30 +1,17 @@
 import { parse, simplifyLostLess, XmlElement } from 'txml';
-import { getRedisClient } from '../redis-client';
+import axios from 'axios';
+import { XMLParser } from 'fast-xml-parser';
+import { JSDOM } from 'jsdom';
+import * as cheerio from 'cheerio';
+import logger from '../logger';
 import { ApiError } from '../error-handler';
+import { getRedisClient } from '../redis-client';
 
-// Cache handler implementation that works in both regular and edge environments
-async function getCacheValue<T>(key: string): Promise<T | null> {
-  try {
-    const redisClient = await getRedisClient();
-    return await redisClient.get<T>(key);
-  } catch (error) {
-    console.error('Failed to get cache value:', error);
-    return null;
-  }
-}
+// Cache keys
+const SITEMAP_CACHE_KEY_PREFIX = 'sitemap:';
+const CONTENT_CACHE_KEY_PREFIX = 'content:';
 
-async function setCacheValue<T>(key: string, value: T, ttl = 24 * 60 * 60): Promise<void> {
-  try {
-    const redisClient = await getRedisClient();
-    await redisClient.set(key, value, ttl);
-  } catch (error) {
-    console.error('Failed to set cache value:', error);
-  }
-}
-
-/**
- * URL data extracted from a sitemap
- */
+// Types
 export interface SitemapUrl {
   loc: string;
   lastmod?: string;
@@ -32,18 +19,13 @@ export interface SitemapUrl {
   priority?: string;
 }
 
-/**
- * Sitemap data with URLs and metadata
- */
 export interface SitemapData {
   urls: SitemapUrl[];
   isIndex: boolean;
   childSitemaps?: string[];
+  lastFetched: number;
 }
 
-/**
- * Content analysis results for a URL
- */
 export interface ContentAnalysis {
   url: string;
   title?: string;
@@ -51,6 +33,39 @@ export interface ContentAnalysis {
   headings: string[];
   wordCount?: number;
   readabilityScore?: number;
+  description: string;
+  content: string;
+  relevantLinks: string[];
+  lastAnalyzed: number;
+}
+
+// TTLs in seconds
+const SITEMAP_CACHE_TTL = 86400; // 24 hours
+const CONTENT_CACHE_TTL = 604800; // 7 days
+
+/**
+ * Get a value from the cache
+ */
+export async function getCacheValue<T>(key: string): Promise<T | null> {
+  try {
+    const redisClient = await getRedisClient();
+    return await redisClient.get<T>(key);
+  } catch (error) {
+    logger.error(`Error getting cache value for key ${key}:`, error);
+    return null;
+  }
+}
+
+/**
+ * Set a value in the cache
+ */
+export async function setCacheValue<T>(key: string, value: T, ttl = SITEMAP_CACHE_TTL): Promise<void> {
+  try {
+    const redisClient = await getRedisClient();
+    await redisClient.set(key, value, ttl);
+  } catch (error) {
+    logger.error(`Error setting cache value for key ${key}:`, error);
+  }
 }
 
 /**
@@ -154,14 +169,16 @@ export async function parseSitemapXml(xmlContent: string, baseUrl: string, recur
         return {
           urls: allUrls,
           isIndex: true,
-          childSitemaps
+          childSitemaps,
+          lastFetched: Date.now()
         };
       }
       
       return {
         urls: [],
         isIndex: true,
-        childSitemaps
+        childSitemaps,
+        lastFetched: Date.now()
       };
     }
     
@@ -191,14 +208,15 @@ export async function parseSitemapXml(xmlContent: string, baseUrl: string, recur
 
       return {
         urls,
-        isIndex: false
+        isIndex: false,
+        lastFetched: Date.now()
       };
     } else {
         // Handle cases where the root isn't <sitemapindex> or <urlset>
         // Could be a single URL entry or an unexpected format.
         // For now, return empty if not recognized.
         console.warn(`Unexpected root element found: ${rootElement.tagName}`);
-        return { urls: [], isIndex: false };
+        return { urls: [], isIndex: false, lastFetched: Date.now() };
     }
   } catch (error) {
     console.error('Error parsing sitemap XML:', error);
@@ -310,6 +328,10 @@ export async function analyzeUrlContent(url: string): Promise<ContentAnalysis> {
       headings,
       wordCount,
       // readabilityScore: 0, // Placeholder for future implementation
+      description: '',
+      content: '',
+      relevantLinks: [],
+      lastAnalyzed: Date.now()
     };
     
     // Cache the result
@@ -321,7 +343,11 @@ export async function analyzeUrlContent(url: string): Promise<ContentAnalysis> {
     return {
       url,
       keywords: [],
-      headings: []
+      headings: [],
+      description: '',
+      content: '',
+      relevantLinks: [],
+      lastAnalyzed: Date.now()
     };
   }
 }

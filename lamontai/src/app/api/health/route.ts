@@ -76,7 +76,7 @@ export async function GET(request: NextRequest) {
         }
         
         // Clean up
-        await redisClient.delete(testKey);
+        await redisClient.del(testKey);
       } catch (redisError) {
         logger.error('Health check - Redis connection failed:', redisError);
         redisStatus = 'error';

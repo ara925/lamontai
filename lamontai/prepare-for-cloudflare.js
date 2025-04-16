@@ -120,8 +120,14 @@ function installDependencies() {
 function createCloudflareEnvFile() {
   log('Creating Cloudflare environment file...', colors.magenta);
 
-  // Load current environment variables
-  // require('dotenv').config({ path: '.env.local' }); // COMMENTED OUT - Assuming vars are already in process.env for prod build
+  // Load current environment variables from .env.local
+  try {
+    require('dotenv').config({ path: '.env.local' });
+    log('Loaded environment variables from .env.local', colors.green);
+  } catch (error) {
+    log('Error loading .env.local file:', colors.red);
+    log(error.message, colors.red);
+  }
 
   // Check for required environment variables
   const missingVars = CONFIG.requiredEnvVars.filter(varName => !process.env[varName]);
