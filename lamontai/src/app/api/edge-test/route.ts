@@ -8,7 +8,7 @@
 
 import { NextRequest } from 'next/server';
 import { verifyJWTEdge, getTokenFromRequestEdge } from '@/lib/auth-utils-edge';
-import { getNeonPrismaClient } from '@/lib/prisma-cloudflare';
+import { getPrismaForEnvironment } from '@/lib/prisma-cloudflare';
 
 // Specify Edge runtime
 export const runtime = 'edge';
@@ -21,6 +21,10 @@ export const dynamic = 'force-dynamic';
  */
 export async function GET(request: NextRequest) {
   const startTime = Date.now();
+  
+  // Get the correct Prisma client for the environment (edge in this case)
+  // Initialize outside try block to potentially use in finally if needed
+  const prisma = getPrismaForEnvironment();
   
   try {
     // Get URL parameters
@@ -76,12 +80,13 @@ export async function GET(request: NextRequest) {
       };
     }
     
-    // 2. Database access test (using Neon-compatible Prisma client)
+    // 2. Database access test
     const skipDb = searchParams.get('skipDb') === 'true';
     
     if (!skipDb) {
       try {
-        const prisma = await getNeonPrismaClient();
+        // Use the already initialized prisma client
+        // const prisma = await getNeonPrismaClient(); // Remove this line
         
         // Get user count (lightweight query)
         const userCount = await prisma.user.count();
@@ -97,6 +102,7 @@ export async function GET(request: NextRequest) {
           info: 'Add ?skipDb=true to bypass database check'
         };
       }
+      // No finally block needed here as $disconnect is not used with Accelerate
     } else {
       responseData.database = {
         connected: false,

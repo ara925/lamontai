@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 // Mock data for demo purposes
+
+// Specify the runtime
+export const runtime = 'nodejs';
+
+// Mark this route as dynamic since it accesses request properties
+export const dynamic = 'force-dynamic';
 const mockKeywordData = {
   mainKeyword: "content marketing",
   relatedKeywords: [

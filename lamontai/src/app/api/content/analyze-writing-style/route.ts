@@ -1,11 +1,23 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getDatabaseClient } from '@/lib/db';
 import { getUserIdFromRequest } from '@/lib/server-auth-utils';
-import { db } from '@/lib/db';
 import { getCachedSitemapData, analyzeUrlContent } from '@/lib/sitemap-utils';
+import { OpenAI } from 'openai';
+
+// Specify the runtime
+export const runtime = 'nodejs';
+
+// Mark this route as dynamic since it accesses request properties
+export const dynamic = 'force-dynamic';
+
+// Instantiate OpenAI client outside handler for potential reuse
+// Ensure process.env.OPENAI_API_KEY is available in edge runtime environment
+const openai = new OpenAI();
 
 export async function GET(request: NextRequest) {
   try {
     // Verify user authentication
+    const db = await getDatabaseClient();
     const userId = await getUserIdFromRequest(request);
     
     if (!userId) {
@@ -133,5 +145,60 @@ export async function GET(request: NextRequest) {
       }, 
       { status: 500 }
     );
+  }
+}
+
+export async function POST(request: NextRequest) {
+  try {
+    const db = await getDatabaseClient();
+    const userId = await getUserIdFromRequest(request);
+    if (!userId) {
+      return NextResponse.json({ message: "Authentication required" }, { status: 401 });
+    }
+
+    const body = await request.json();
+    const { sampleText } = body;
+
+    if (!sampleText || typeof sampleText !== 'string' || sampleText.trim().length < 100) {
+      return NextResponse.json({ message: "A sample text of at least 100 characters is required" }, { status: 400 });
+    }
+
+    // Limit sample text size to prevent excessive API usage
+    const truncatedText = sampleText.slice(0, 5000);
+
+    // Call OpenAI API to analyze writing style
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o-mini", // Use a cost-effective model for analysis
+      messages: [
+        {
+          role: "system",
+          content: "Analyze the following text and describe the author's writing style in a concise paragraph. Focus on tone, complexity, sentence structure, and overall voice. Output only the description.",
+        },
+        { role: "user", content: truncatedText },
+      ],
+      temperature: 0.5,
+      max_tokens: 150,
+    });
+
+    const writingStyle = completion.choices[0]?.message?.content?.trim();
+
+    if (!writingStyle) {
+      return NextResponse.json({ message: "Failed to analyze writing style" }, { status: 500 });
+    }
+
+    // Optionally, save the analyzed style to user settings (ensure settings exist)
+    await db.settings.upsert({
+        where: { userId },
+        update: { writingStyleDescription: writingStyle }, // Add field to Settings model if needed
+        create: {
+            userId,
+            writingStyleDescription: writingStyle
+        }
+    });
+
+    return NextResponse.json({ success: true, writingStyle });
+  } catch (error) {
+    console.error("Failed to analyze writing style:", error);
+    return NextResponse.json({ message: "Failed to analyze writing style" }, { status: 500 });
   }
 } 

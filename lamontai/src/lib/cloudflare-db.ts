@@ -13,7 +13,7 @@ export async function getCloudflareClient(): Promise<PrismaClient> {
     try {
       // Dynamically import modules needed for Cloudflare
       const { neon } = await import('@neondatabase/serverless');
-      const { PrismaNeonHTTP } = await import('@prisma/adapter-neon');
+      const { PrismaNeon } = await import('@prisma/adapter-neon');
       
       // Get connection string from environment
       const connectionString = process.env.DATABASE_URL;
@@ -28,7 +28,7 @@ export async function getCloudflareClient(): Promise<PrismaClient> {
       // Create Prisma client with Neon adapter
       prisma = new PrismaClient({
         // @ts-ignore - Type issues with the Neon adapter
-        adapter: new PrismaNeonHTTP(sql),
+        adapter: new PrismaNeon({ connectionString }),
         log: process.env.NODE_ENV === 'development' 
           ? ['query', 'error', 'warn'] 
           : ['error'],

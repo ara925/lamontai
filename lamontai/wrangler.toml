@@ -3,14 +3,22 @@
 name = "lamontai"
 main = "./.next/standalone/server.js"
 compatibility_date = "2023-01-01"
-compatibility_flags = ["nodejs_compat"]
+compatibility_flags = [
+  "nodejs_compat",
+  "streams_enable_constructors"
+]
 workers_dev = true
+node_compat = true
 
 [build]
 command = "npm run cloudflare:build"
 
 [site]
 bucket = "./.next/static"
+
+# Enable the Node.js compatibility flag
+[build.upload]
+format = "service-worker"
 
 [env.production]
 # Production-specific settings

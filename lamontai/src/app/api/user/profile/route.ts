@@ -1,20 +1,21 @@
-// export const runtime = 'nodejs'; // Remove runtime config
+// Add runtime config for edge
+export const runtime = 'edge'; 
+export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
-import { verifyJWT } from '@/lib/server-auth-utils';
-import { getServerSession } from 'next-auth/next';
-import { authOptions } from '@/lib/auth-config';
+import { getDatabaseClient } from '@/lib/db';
+import { getUserIdFromRequest } from '@/lib/server-auth-utils';
 
 export async function GET(req: NextRequest) {
   try {
     console.log('API: Profile request received');
+    const db = await getDatabaseClient();
     
-    // Get the token from the Authorization header
-    const authHeader = req.headers.get('Authorization');
+    // Get user ID using edge-compatible method
+    const userId = await getUserIdFromRequest(req);
     
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      console.log('API: No bearer token provided');
+    if (!userId) {
+      console.log('API: Authentication failed');
       return NextResponse.json(
         { 
           success: false, 
@@ -24,66 +25,50 @@ export async function GET(req: NextRequest) {
       );
     }
     
-    const token = authHeader.split(' ')[1];
-    console.log('API: Token received:', token.substring(0, 15) + '...');
+    console.log('API: User authenticated, ID:', userId);
     
-    try {
-      // Verify the token
-      const decoded = await verifyJWT(token);
-      console.log('API: Token verified, user ID:', decoded.id);
-      
-      // Check if user exists in database
-      const user = await db.user.findUnique({
-        where: { id: decoded.id },
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          role: true,
-          createdAt: true,
-          updatedAt: true
-        }
-      });
-      
-      if (!user) {
-        console.log('API: User not found in database');
-        return NextResponse.json(
-          { 
-            success: false, 
-            message: 'User not found' 
-          }, 
-          { status: 404 }
-        );
+    // Check if user exists in database
+    const user = await db.user.findUnique({
+      where: { id: userId },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        createdAt: true,
+        updatedAt: true
       }
-      
-      console.log('API: User found in database:', user.email);
-      
-      // Return user data
-      return NextResponse.json(
-        { 
-          success: true, 
-          data: user 
-        }, 
-        { status: 200 }
-      );
-      
-    } catch (tokenError) {
-      console.log('API: Token verification failed', tokenError);
+    });
+    
+    if (!user) {
+      console.log('API: User not found in database');
       return NextResponse.json(
         { 
           success: false, 
-          message: 'Invalid or expired token' 
+          message: 'User not found' 
         }, 
-        { status: 401 }
+        { status: 404 }
       );
     }
+    
+    console.log('API: User found in database:', user.email);
+    
+    // Return user data
+    return NextResponse.json(
+      { 
+        success: true, 
+        data: user 
+      }, 
+      { status: 200 }
+    );
     
   } catch (error) {
     console.error('API: Profile error:', error);
     return NextResponse.json(
       { 
         success: false, 
-        message: 'Internal server error' 
+        message: 'Internal server error',
+        error: error instanceof Error ? error.message : 'Unknown error'
       }, 
       { status: 500 }
     );
@@ -91,19 +76,28 @@ export async function GET(req: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
-  // Get the user session
-  const session = await getServerSession(authOptions);
-  
-  if (!session || !session.user) {
-    return NextResponse.json({
-      success: false,
-      message: "Not authenticated"
-    }, { status: 401 });
-  }
-  
   try {
-    const userId = session.user.id;
-    const updates = await request.json();
+    const db = await getDatabaseClient();
+    // Get user ID using edge-compatible method
+    const userId = await getUserIdFromRequest(request);
+    
+    if (!userId) {
+      return NextResponse.json({
+        success: false,
+        message: "Not authenticated"
+      }, { status: 401 });
+    }
+    
+    // Parse the request body with error handling
+    let updates;
+    try {
+      updates = await request.json();
+    } catch (e) {
+      return NextResponse.json({
+        success: false,
+        message: "Invalid request body"
+      }, { status: 400 });
+    }
     
     // Find the user in the database
     const existingUser = await db.user.findUnique({

@@ -1,27 +1,55 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getServerSession } from 'next-auth/next';
-import { authOptions } from '@/lib/auth-config';
-import '@/lib/auth-types'; // Import the type declarations
+import { getUserIdFromRequest } from '@/lib/server-auth-utils';
+
+// Configure for nodejs runtime
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 export async function POST(request: NextRequest) {
-  // Check authentication
-  const session = await getServerSession(authOptions);
-  
-  if (!session || !session.user) {
-    return NextResponse.json({
-      success: false,
-      message: "Authentication required"
-    }, { status: 401 });
-  }
-  
   try {
-    const { url, content, keywords } = await request.json();
+    // Check authentication using a method that works in all environments
+    const userId = await getUserIdFromRequest(request);
+    
+    if (!userId) {
+      return NextResponse.json({
+        success: false,
+        message: "Authentication required"
+      }, { status: 401 });
+    }
+    
+    // Safely parse JSON with error handling
+    let body;
+    try {
+      body = await request.json();
+    } catch (error) {
+      console.error('Error parsing request body:', error);
+      return NextResponse.json({
+        success: false,
+        message: "Invalid JSON input"
+      }, { status: 400 });
+    }
+    
+    // Defensively extract and validate fields
+    const url = body?.url;
+    const content = body?.content;
+    const keywords = body?.keywords;
     
     if ((!url && !content) || !keywords) {
       return NextResponse.json({
         success: false,
         message: "You must provide either a URL or content to analyze, along with target keywords"
       }, { status: 400 });
+    }
+    
+    // Generate search keywords array safely
+    let keywordsArray: string[] = [];
+    
+    if (Array.isArray(keywords)) {
+      keywordsArray = keywords.filter(k => typeof k === 'string');
+    } else if (typeof keywords === 'string') {
+      keywordsArray = [keywords];
+    } else {
+      console.warn('Keywords provided in an unusable format:', keywords);
     }
     
     // Simulate processing time
@@ -33,7 +61,7 @@ export async function POST(request: NextRequest) {
       readabilityScore: 92,
       keywordDensity: {
         primary: 2.3, // percentage
-        secondary: keywords.length > 1 ? 1.7 : 0
+        secondary: keywordsArray.length > 1 ? 1.7 : 0
       },
       contentLength: {
         words: 1450,

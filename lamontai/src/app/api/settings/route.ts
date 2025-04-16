@@ -1,9 +1,13 @@
 // export const runtime = 'nodejs'; // Remove runtime config
 
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import { getDatabaseClient } from '@/lib/db'; // Import getter
 import { getUserIdFromRequest } from '@/lib/server-auth-utils';
 import { z } from 'zod';
+
+// Explicitly configure for edge runtime
+export const runtime = 'edge';
+export const dynamic = 'force-dynamic';
 
 // Schema for validating settings update
 const settingsSchema = z.object({
@@ -14,38 +18,31 @@ const settingsSchema = z.object({
 
 // GET /api/settings - Get user settings
 export async function GET(request: NextRequest) {
-  const userId = await getUserIdFromRequest(request);
-  
-  if (!userId) {
-    return NextResponse.json(
-      { success: false, message: 'Unauthorized' },
-      { status: 401 }
-    );
-  }
-  
   try {
-    // Find user with settings
-    const settings = await db.settings.findUnique({
-      where: { userId }
-    });
-    
-    if (!settings) {
-      return NextResponse.json(
-        { success: false, message: 'Settings not found' },
-        { status: 404 }
-      );
+    const db = await getDatabaseClient(); // Await client
+    const userId = await getUserIdFromRequest(request);
+    if (!userId) {
+      return NextResponse.json({ message: "Authentication required" }, { status: 401 });
     }
-    
-    return NextResponse.json(
-      { success: true, data: settings },
-      { status: 200 }
-    );
+
+    const settings = await db.settings.findUnique({
+      where: { userId },
+    });
+
+    if (!settings) {
+        // If settings don't exist, maybe create them with defaults?
+        // Or return a specific status/message indicating no settings found.
+        // For now, return null or default structure
+        return NextResponse.json({ 
+            theme: 'light', language: 'english', notifications: true 
+            // Add other default fields from your schema if necessary
+        }); 
+    }
+
+    return NextResponse.json(settings);
   } catch (error) {
-    console.error('Error fetching settings:', error);
-    return NextResponse.json(
-      { success: false, message: 'Error fetching settings' },
-      { status: 500 }
-    );
+    console.error("Failed to fetch settings:", error);
+    return NextResponse.json({ message: "Failed to fetch settings" }, { status: 500 });
   }
 }
 
@@ -84,6 +81,7 @@ export async function PUT(request: NextRequest) {
     if (result.data.notifications !== undefined) updateData.notifications = result.data.notifications;
     
     // Update settings
+    const db = await getDatabaseClient();
     const settings = await db.settings.update({
       where: { userId },
       data: updateData
@@ -104,59 +102,45 @@ export async function PUT(request: NextRequest) {
 
 // PATCH /api/settings - Update user settings
 export async function PATCH(request: NextRequest) {
-  const userId = await getUserIdFromRequest(request);
-  
-  if (!userId) {
-    return NextResponse.json(
-      { success: false, message: 'Unauthorized' },
-      { status: 401 }
-    );
-  }
-  
   try {
+    const db = await getDatabaseClient(); // Await client
+    const userId = await getUserIdFromRequest(request);
+    if (!userId) {
+      return NextResponse.json({ message: "Authentication required" }, { status: 401 });
+    }
+
     const body = await request.json();
     
-    // Validate the request data
-    const result = settingsSchema.safeParse(body);
-    
-    if (!result.success) {
-      return NextResponse.json(
-        { 
-          success: false,
-          message: 'Validation failed', 
-          errors: result.error.errors 
-        }, 
-        { status: 400 }
-      );
+    // Validate or sanitize body input here if needed
+    const { theme, language, notifications, apiKey, ...otherSettings } = body;
+
+    // Prepare data for update, only include fields present in the request
+    const dataToUpdate: any = {};
+    if (theme !== undefined) dataToUpdate.theme = theme;
+    if (language !== undefined) dataToUpdate.language = language;
+    if (notifications !== undefined) dataToUpdate.notifications = notifications;
+    if (apiKey !== undefined) dataToUpdate.apiKey = apiKey; // Be cautious with API key updates
+    // Add other updatable settings fields here
+    // Example: if (otherSettings.someField !== undefined) dataToUpdate.someField = otherSettings.someField;
+
+    if (Object.keys(dataToUpdate).length === 0) {
+        return NextResponse.json({ message: "No valid fields provided for update" }, { status: 400 });
     }
-    
-    // Create properly typed update and create objects
-    const updateData: any = {};
-    if (result.data.theme !== undefined) updateData.theme = result.data.theme;
-    if (result.data.language !== undefined) updateData.language = result.data.language;
-    if (result.data.notifications !== undefined) updateData.notifications = result.data.notifications;
-    
-    const createData: any = {
-      userId,
-      ...updateData
-    };
-    
-    // Update settings using upsert (update or create if not exists)
-    const updatedSettings = await db.settings.upsert({
+
+    const updatedSettings = await db.settings.update({
       where: { userId },
-      update: updateData, // Fields to update if record exists
-      create: createData  // Fields to use if record needs to be created
+      data: dataToUpdate,
     });
-    
-    return NextResponse.json(
-      { success: true, data: updatedSettings },
-      { status: 200 }
-    );
+
+    return NextResponse.json(updatedSettings);
   } catch (error) {
-    console.error('Error updating settings:', error);
-    return NextResponse.json(
-      { success: false, message: 'Error updating settings' },
-      { status: 500 }
-    );
+    console.error("Failed to update settings:", error);
+     // Handle potential Prisma errors like record not found if upsert isn't used
+     if ((error as any).code === 'P2025') { 
+        // Optionally, create settings if they don't exist (upsert pattern)
+        // For now, return error
+        return NextResponse.json({ message: "Settings not found for this user." }, { status: 404 });
+    }
+    return NextResponse.json({ message: "Failed to update settings" }, { status: 500 });
   }
 } 

@@ -1,10 +1,12 @@
 /** @type {import('next').NextConfig} */
+const webpack = require('webpack');
+
 const nextConfig = {
   reactStrictMode: true,
   swcMinify: true,
   
-  // External packages to transpile
-  transpilePackages: ['lucide-react', 'bcryptjs', '@prisma/client'],
+  // External packages to transpile - include packages that need to be transpiled
+  transpilePackages: [],
   
   // Important environment variables
   env: {
@@ -17,14 +19,115 @@ const nextConfig = {
     NEXT_PUBLIC_DEPLOY_ENV: process.env.NEXT_PUBLIC_DEPLOY_ENV || 'local',
   },
   
-  // Disable type checking during builds for faster builds
-  typescript: {
-    ignoreBuildErrors: true
+  // Set the output for Cloudflare Pages compatibility
+  output: 'standalone',
+  
+  // Experimental features
+  experimental: {
+    // Required for certain features
+    esmExternals: true,
+    // Enable instrumentation (performance monitoring)
+    instrumentationHook: true,
+    // Adjust as needed for your project
+    serverComponentsExternalPackages: ['winston', 'bcryptjs', 'ioredis', 'winston-daily-rotate-file'],
   },
   
-  // Disable ESLint during builds for faster builds
+  // Handle specific route exclusions for Cloudflare
+  webpack: (config, { isServer, dev }) => {
+    if (!isServer) {
+      // Don't include certain server-only packages in client bundles
+      config.resolve.fallback = {
+        ...config.resolve.fallback,
+        fs: false,
+        net: false,
+        tls: false,
+        // For crypto, use the crypto-browserify polyfill instead of setting to false
+        crypto: require.resolve('crypto-browserify'),
+        stream: require.resolve('stream-browserify'),
+        http: require.resolve('stream-http'),
+        https: require.resolve('https-browserify'),
+        os: require.resolve('os-browserify/browser'),
+        path: require.resolve('path-browserify'),
+        zlib: require.resolve('browserify-zlib'),
+        util: require.resolve('util/'),
+        url: false,
+        assert: require.resolve('assert/'),
+        buffer: require.resolve('buffer/'),
+      };
+
+      // Add polyfills for Node.js globals
+      config.plugins.push(
+        new webpack.ProvidePlugin({
+          process: 'process/browser',
+          Buffer: ['buffer', 'Buffer'],
+        })
+      );
+    }
+    
+    return config;
+  },
+  
+  // Enable TypeScript type checking in build
+  typescript: {
+    // Properly check TypeScript during builds
+    ignoreBuildErrors: false,
+  },
+  
+  // Enable ESLint checks in build
   eslint: {
-    ignoreDuringBuilds: true
+    // Properly check ESLint during builds
+    ignoreDuringBuilds: false,
+  },
+  
+  // Apply security headers to all routes
+  async headers() {
+    return [
+      {
+        source: '/:path*',
+        headers: [
+          {
+            key: 'X-Frame-Options',
+            value: 'DENY',
+          },
+          {
+            key: 'X-Content-Type-Options',
+            value: 'nosniff',
+          },
+          {
+            key: 'X-XSS-Protection',
+            value: '1; mode=block',
+          },
+        ],
+      },
+    ];
+  },
+  
+  // Setup redirects
+  async redirects() {
+    return [
+      {
+        source: '/login',
+        destination: '/auth/login',
+        permanent: true,
+      },
+    ];
+  },
+  
+  // Override routes with custom configurations
+  async rewrites() {
+    const isCloudflare = process.env.NEXT_PUBLIC_DEPLOY_ENV === 'cloudflare';
+    
+    if (isCloudflare) {
+      return [
+        // Prevent problematic routes from being accessed directly
+        {
+          source: '/api/auth/:path*',
+          destination: '/api/auth-cloudflare/:path*',
+        },
+      ];
+    }
+    
+    return [];
   },
   
   images: {
@@ -37,80 +140,23 @@ const nextConfig = {
     // Configure Cloudflare Images support
     loader: process.env.NEXT_PUBLIC_DEPLOY_ENV === 'cloudflare' ? 'custom' : undefined,
     loaderFile: process.env.NEXT_PUBLIC_DEPLOY_ENV === 'cloudflare' ? './src/lib/cloudflare-image-loader.js' : undefined,
+    domains: ['images.unsplash.com', 'via.placeholder.com'],
+    formats: ['image/avif', 'image/webp'],
   },
   
-  // Specify output directory for production build
-  distDir: '.next',
-  
-  experimental: {
-    // Experimental hooks
-    instrumentationHook: true,
-    // WebAssembly support
-    esmExternals: 'loose',
+  // Enable the Edge runtime only for specific pages that support it
+  // This is needed to support Cloudflare Pages
+  serverRuntimeConfig: {
+    PROJECT_ROOT: __dirname,
   },
-  
-  // Configure header security policies
-  async headers() {
-    return [
-      {
-        source: '/api/:path*',
-        headers: [
-          {
-            key: 'Access-Control-Allow-Credentials',
-            value: 'true',
-          },
-          {
-            key: 'Access-Control-Allow-Origin',
-            value: '*',
-          },
-          {
-            key: 'Access-Control-Allow-Methods',
-            value: 'GET,DELETE,PATCH,POST,PUT',
-          },
-          {
-            key: 'Access-Control-Allow-Headers',
-            value: 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization',
-          },
-        ],
-      },
-    ];
-  },
-  
-  // Output configuration for Cloudflare deployment
-  output: process.env.NEXT_PUBLIC_DEPLOY_ENV === 'cloudflare' ? 'standalone' : undefined,
-  
-  // Webpack configuration for Cloudflare compatibility
-  webpack: (config, { isServer, dev }) => {
-    // Polyfill Node.js modules for Cloudflare
-    if (process.env.NEXT_PUBLIC_DEPLOY_ENV === 'cloudflare') {
-      config.resolve.fallback = {
-        ...config.resolve.fallback,
-        crypto: require.resolve('crypto-browserify'),
-        stream: require.resolve('stream-browserify'),
-        buffer: require.resolve('buffer'),
-        util: require.resolve('util'),
-        http: require.resolve('stream-http'),
-        https: require.resolve('https-browserify'),
-        querystring: require.resolve('querystring-es3'),
-        fs: false,
-        path: require.resolve('path-browserify'),
-        os: require.resolve('os-browserify/browser'),
-        zlib: require.resolve('browserify-zlib'),
-        assert: require.resolve('assert/'),
-      };
-      
-      // Import webpack instead of using config.constructor.ProvidePlugin
-      const webpack = require('webpack');
-      config.plugins.push(
-        new webpack.ProvidePlugin({
-          Buffer: ['buffer', 'Buffer'],
-          process: 'process/browser',
-        })
-      );
-    }
-    
-    return config;
-  },
+}
+
+// Check for Edge Runtime configuration
+if (process.env.NEXT_PUBLIC_DEPLOY_ENV === 'cloudflare') {
+  // Additional Cloudflare-specific settings
+  nextConfig.experimental = {
+    ...nextConfig.experimental,
+  };
 }
 
 module.exports = nextConfig;

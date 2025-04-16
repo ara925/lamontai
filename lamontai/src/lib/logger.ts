@@ -1,13 +1,7 @@
-// Create a simplified logger that's compatible with Edge Runtime
-import winston from 'winston';
-import 'winston-daily-rotate-file';
-import path from 'path';
-
-// Define custom type for DailyRotateFile transport
-import { DailyRotateFileTransportOptions } from 'winston-daily-rotate-file';
-
-// Remove problematic module augmentation
-// We'll handle the types with casting instead
+/**
+ * Edge-compatible logger implementation
+ * Works in both Node.js and Edge Runtime environments
+ */
 
 // Define log levels
 const levels = {
@@ -18,167 +12,139 @@ const levels = {
   debug: 4,
 };
 
-// Define colors for each level
+// Define colors for each level (for Node.js console output)
 const colors = {
-  error: 'red',
-  warn: 'yellow',
-  info: 'green',
-  http: 'magenta',
-  debug: 'blue',
+  error: '\x1b[31m', // red
+  warn: '\x1b[33m',  // yellow
+  info: '\x1b[32m',  // green
+  http: '\x1b[35m',  // magenta
+  debug: '\x1b[34m', // blue
+  reset: '\x1b[0m',  // reset
 };
 
-// Add colors to Winston
-winston.addColors(colors);
-
-// Get log level based on environment
-const level = () => {
-  const env = process.env.NODE_ENV || 'development';
-  const logLevel = process.env.LOG_LEVEL || 'info';
-  
-  // Use DEBUG level in development, otherwise use the configured level
-  return env === 'development' ? 'debug' : logLevel;
+// Get current log level from environment or default to info
+const getLogLevel = () => {
+  if (typeof process !== 'undefined' && process.env.LOG_LEVEL) {
+    return process.env.LOG_LEVEL;
+  }
+  return typeof process !== 'undefined' && process.env.NODE_ENV === 'development' ? 'debug' : 'info';
 };
 
-// Format for logs
-const logFormat = winston.format.combine(
-  winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-  winston.format.errors({ stack: true }),
-  winston.format.splat(),
-  winston.format.printf(
-    (info) => `${info.timestamp} ${info.level}: ${info.message}${info.stack ? '\n' + info.stack : ''}`
-  )
-);
+// Determine if we're in an Edge Runtime environment
+const isEdgeRuntime = () => {
+  return typeof process !== 'undefined' && 
+         (process.env.NEXT_PUBLIC_DEPLOY_ENV === 'cloudflare' || 
+          process.env.NEXT_PUBLIC_EDGE_RUNTIME === 'edge');
+};
 
-// Define a conditional logger depending on the environment
-let logger: winston.Logger;
+// Determine if we're in a browser environment
+const isBrowser = () => {
+  return typeof window !== 'undefined';
+};
 
-// Use a simple console transport in edge runtime
-const isEdgeRuntime = typeof window === 'undefined' && typeof global !== 'undefined' && !global.process?.versions?.node;
-const isServerSideRendering = typeof window === 'undefined' && !isEdgeRuntime;
+// Simple implementation that works in all environments
+class EdgeCompatibleLogger {
+  private level: string;
+  private service: string;
 
-// Create a basic console-based logger for Edge runtime
-if (isEdgeRuntime) {
-  // Creating a minimal logger for Edge Runtime
-  const createConsoleLogger = () => {
-    return {
-      error: (message: string) => console.error(`[ERROR] ${message}`),
-      warn: (message: string) => console.warn(`[WARN] ${message}`),
-      info: (message: string) => console.info(`[INFO] ${message}`),
-      http: (message: string) => console.log(`[HTTP] ${message}`),
-      debug: (message: string) => console.debug(`[DEBUG] ${message}`),
-    };
-  };
-  
-  // @ts-ignore - We're creating a simple object for Edge compatibility
-  logger = createConsoleLogger();
-} else {
-  // Create the standard Winston logger for Node.js environment
-  const logDir = path.join(process.cwd(), 'logs');
+  constructor(service = 'lamontai') {
+    this.level = getLogLevel();
+    this.service = service;
+  }
 
-  // Define log formats
-  const formats = [
-    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-    winston.format.errors({ stack: true }),
-    winston.format.splat(),
-    winston.format.json()
-  ];
+  // Format a log message
+  private format(level: string, message: string, meta?: any): string {
+    const timestamp = new Date().toISOString();
+    const metaStr = meta ? ` ${JSON.stringify(meta)}` : '';
+    return `[${timestamp}] [${this.service}] [${level.toUpperCase()}]: ${message}${metaStr}`;
+  }
 
-  // Configure daily rotate file transport for production
-  const fileRotateTransport = new (winston.transports as any).DailyRotateFile({
-    dirname: logDir,
-    filename: 'application-%DATE%.log',
-    datePattern: 'YYYY-MM-DD',
-    maxSize: '20m',
-    maxFiles: '14d',
-    zippedArchive: true,
-  });
+  // Determines if a message at the given level should be logged
+  private shouldLog(level: string): boolean {
+    return levels[level as keyof typeof levels] <= levels[this.level as keyof typeof levels];
+  }
 
-  logger = winston.createLogger({
-    level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
-    levels,
-    format: winston.format.combine(...formats),
-    defaultMeta: { service: 'lamontai' },
-    transports: [
-      // Write logs with level 'error' and below to error.log
-      // Write all logs to console in development
-      process.env.NODE_ENV === 'production'
-        ? fileRotateTransport
-        : new winston.transports.Console({
-            format: winston.format.combine(
-              winston.format.colorize(),
-              winston.format.printf(
-                (info) => `${info.timestamp} ${info.level}: ${info.message}`
-              )
-            ),
-          }),
-    ],
-    exceptionHandlers: [
-      process.env.NODE_ENV === 'production'
-        ? new (winston.transports as any).DailyRotateFile({
-            dirname: logDir,
-            filename: 'exceptions-%DATE%.log',
-            datePattern: 'YYYY-MM-DD',
-            maxSize: '20m',
-            maxFiles: '14d',
-          })
-        : new winston.transports.Console({
-            format: winston.format.combine(
-              winston.format.colorize(),
-              winston.format.printf(
-                (info) => `${info.timestamp} ${info.level}: ${info.message}`
-              )
-            ),
-          }),
-    ],
-    rejectionHandlers: [
-      process.env.NODE_ENV === 'production'
-        ? new (winston.transports as any).DailyRotateFile({
-            dirname: logDir,
-            filename: 'rejections-%DATE%.log',
-            datePattern: 'YYYY-MM-DD',
-            maxSize: '20m',
-            maxFiles: '14d',
-          })
-        : new winston.transports.Console({
-            format: winston.format.combine(
-              winston.format.colorize(),
-              winston.format.printf(
-                (info) => `${info.timestamp} ${info.level}: ${info.message}`
-              )
-            ),
-          }),
-    ],
-  });
-  
-  // Add file transports in production server environment (not in Edge)
-  if (isServerSideRendering && process.env.NODE_ENV === 'production') {
-    try {
-      // We'll skip the dynamic file logging setup to avoid type compatibility issues
-      console.log('File logging disabled due to type compatibility issues');
-    } catch (e) {
-      console.warn('Error setting up file transports:', e);
+  // Log to the appropriate output based on environment
+  private log(level: string, message: string, meta?: any): void {
+    if (!this.shouldLog(level)) return;
+
+    const formattedMessage = this.format(level, message, meta);
+    
+    // In the browser, use console methods
+    if (isBrowser()) {
+      switch (level) {
+        case 'error':
+          console.error(formattedMessage);
+          break;
+        case 'warn':
+          console.warn(formattedMessage);
+          break;
+        case 'info':
+          console.info(formattedMessage);
+          break;
+        case 'debug':
+        case 'http':
+        default:
+          console.log(formattedMessage);
+          break;
+      }
+      return;
     }
+
+    // In Node.js (not Edge), we can use colored output
+    if (!isEdgeRuntime()) {
+      const color = colors[level as keyof typeof colors] || '';
+      console.log(`${color}${formattedMessage}${colors.reset}`);
+      
+      // Log to file only in Node.js server environment (not in Edge)
+      if (typeof process !== 'undefined' && 
+          process.env.NODE_ENV === 'production' && 
+          !isBrowser() && 
+          !isEdgeRuntime()) {
+        
+        // In a full Node.js environment, we could call file logging
+        // but we'll skip this in production builds to avoid edge compatibility issues
+        // To be implemented with a dynamic import in a server-only context
+        console.log('File logging available in full Node.js environment');
+      }
+      return;
+    }
+
+    // In Edge Runtime, use plain console.log
+    console.log(formattedMessage);
+  }
+
+  // Public methods
+  error(message: string, meta?: any): void {
+    this.log('error', message, meta);
+  }
+
+  warn(message: string, meta?: any): void {
+    this.log('warn', message, meta);
+  }
+
+  info(message: string, meta?: any): void {
+    this.log('info', message, meta);
+  }
+
+  http(message: string, meta?: any): void {
+    this.log('http', message, meta);
+  }
+
+  debug(message: string, meta?: any): void {
+    this.log('debug', message, meta);
   }
 }
 
-/**
- * Stream for Morgan HTTP request logger (only used in Node.js environment)
- */
+// Create and export a singleton instance
+const logger = new EdgeCompatibleLogger();
+
+// Export the logger API
+export default logger;
+
+// Stream for HTTP request logging (for Node.js only)
 export const stream = {
   write: (message: string) => {
-    if (typeof logger.http === 'function') {
-      logger.http(message.trim());
-    } else {
-      console.log(`[HTTP] ${message.trim()}`);
-    }
+    logger.http(message.trim());
   },
-};
-
-// Export a more convenient API
-export default {
-  error: (message: string, meta?: any) => logger.error(message, meta),
-  warn: (message: string, meta?: any) => logger.warn(message, meta),
-  info: (message: string, meta?: any) => logger.info(message, meta),
-  http: (message: string, meta?: any) => logger.http(message, meta),
-  debug: (message: string, meta?: any) => logger.debug(message, meta),
 }; 

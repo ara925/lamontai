@@ -1,6 +1,7 @@
-// Simple logger implementation to avoid Edge Runtime compatibility issues
-import winston from 'winston';
-import path from 'path';
+/**
+ * Edge-compatible logger implementation
+ * Works in both Node.js and Edge Runtime environments
+ */
 
 // Define log levels
 const levels = {
@@ -11,103 +12,165 @@ const levels = {
   debug: 4,
 };
 
-// Define colors for each level
+// Define colors for each level (for Node.js console output)
 const colors = {
-  error: 'red',
-  warn: 'yellow',
-  info: 'green',
-  http: 'magenta',
-  debug: 'blue',
+  error: '\x1b[31m', // red
+  warn: '\x1b[33m',  // yellow
+  info: '\x1b[32m',  // green
+  http: '\x1b[35m',  // magenta
+  debug: '\x1b[34m', // blue
+  reset: '\x1b[0m',  // reset
 };
 
-// Add colors to Winston
-winston.addColors(colors);
+// Get current log level from environment or default to info
+const getLogLevel = () => {
+  if (process.env.LOG_LEVEL) {
+    return process.env.LOG_LEVEL;
+  }
+  return process.env.NODE_ENV === 'development' ? 'debug' : 'info';
+};
 
-// Basic logger configuration
-const logger = winston.createLogger({
-  level: process.env.NODE_ENV === 'development' ? 'debug' : 'info',
-  levels,
-  format: winston.format.combine(
-    winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-    winston.format.errors({ stack: true }),
-    winston.format.splat(),
-    winston.format.json()
-  ),
-  defaultMeta: { service: 'lamontai' },
-  transports: [
-    new winston.transports.Console({
-      format: winston.format.combine(
-        winston.format.colorize(),
-        winston.format.printf(
-          (info) => `${info.timestamp} ${info.level}: ${info.message}`
-        )
-      )
-    }),
-  ],
-});
+// Determine if we're in an Edge Runtime environment
+const isEdgeRuntime = () => {
+  return process.env.NEXT_PUBLIC_DEPLOY_ENV === 'cloudflare' || 
+         (typeof process !== 'undefined' && process.env.NEXT_PUBLIC_EDGE_RUNTIME === 'edge');
+};
 
-// Function to safely enable file logging in server environments only
-const setupFileLogging = () => {
-  // Skip in browser or Edge environment
-  if (typeof window !== 'undefined' || typeof process === 'undefined') {
-    return;
+// Determine if we're in a browser environment
+const isBrowser = () => {
+  return typeof window !== 'undefined';
+};
+
+// Simple implementation that works in all environments
+class EdgeCompatibleLogger {
+  private level: string;
+  private service: string;
+
+  constructor(service = 'lamontai') {
+    this.level = getLogLevel();
+    this.service = service;
   }
 
-  try {
-    // This would normally use winston-daily-rotate-file
-    // But we'll use a simple file transport to avoid Edge compatibility issues
-    const fs = require('fs');
-    const logDir = path.join(process.cwd(), 'logs');
+  // Format a log message
+  private format(level: string, message: string, meta?: any): string {
+    const timestamp = new Date().toISOString();
+    const metaStr = meta ? ` ${JSON.stringify(meta)}` : '';
+    return `[${timestamp}] [${this.service}] [${level.toUpperCase()}]: ${message}${metaStr}`;
+  }
+
+  // Determines if a message at the given level should be logged
+  private shouldLog(level: string): boolean {
+    return levels[level as keyof typeof levels] <= levels[this.level as keyof typeof levels];
+  }
+
+  // Log to the appropriate output based on environment
+  private log(level: string, message: string, meta?: any): void {
+    if (!this.shouldLog(level)) return;
+
+    const formattedMessage = this.format(level, message, meta);
     
-    // Create logs directory if it doesn't exist
-    if (!fs.existsSync(logDir)) {
-      fs.mkdirSync(logDir, { recursive: true });
+    // In the browser, use console methods
+    if (isBrowser()) {
+      switch (level) {
+        case 'error':
+          console.error(formattedMessage);
+          break;
+        case 'warn':
+          console.warn(formattedMessage);
+          break;
+        case 'info':
+          console.info(formattedMessage);
+          break;
+        case 'debug':
+        case 'http':
+        default:
+          console.log(formattedMessage);
+          break;
+      }
+      return;
     }
-    
-    const logFilePath = path.join(logDir, `app-${new Date().toISOString().split('T')[0]}.log`);
-    const errorFilePath = path.join(logDir, `error-${new Date().toISOString().split('T')[0]}.log`);
-    
-    // Add basic file transports
-    logger.add(new winston.transports.File({
-      filename: logFilePath,
-      format: winston.format.combine(
-        winston.format.timestamp(),
-        winston.format.json()
-      ),
-    }));
-    
-    logger.add(new winston.transports.File({
-      filename: errorFilePath,
-      level: 'error',
-      format: winston.format.combine(
-        winston.format.timestamp(),
-        winston.format.json()
-      ),
-    }));
-    
-    logger.info('File logging enabled');
-  } catch (error) {
-    console.error('Failed to set up file logging:', error);
-  }
-};
 
-// Set up file logging in production and on server only
-if (process.env.NODE_ENV === 'production' && typeof window === 'undefined') {
-  setupFileLogging();
+    // In Node.js (not Edge), we can use colored output
+    if (!isEdgeRuntime()) {
+      const color = colors[level as keyof typeof colors] || '';
+      console.log(`${color}${formattedMessage}${colors.reset}`);
+      
+      // Log to file only in Node.js server environment (not in Edge)
+      this.logToFile(level, formattedMessage);
+      return;
+    }
+
+    // In Edge Runtime, use plain console.log
+    console.log(formattedMessage);
+  }
+
+  // Conditionally log to file in Node.js environment
+  private logToFile(level: string, message: string): void {
+    // Skip file logging in browser, Edge, or if not in production
+    if (isBrowser() || isEdgeRuntime() || process.env.NODE_ENV !== 'production') {
+      return;
+    }
+
+    // Use Winston for file logging only if we're in a Node.js environment
+    try {
+      // Dynamically import to avoid issues in Edge
+      if (typeof require !== 'undefined') {
+        const fs = require('fs');
+        const path = require('path');
+        
+        const logDir = path.join(process.cwd(), 'logs');
+        
+        // Create logs directory if it doesn't exist
+        if (!fs.existsSync(logDir)) {
+          fs.mkdirSync(logDir, { recursive: true });
+        }
+        
+        const logFile = path.join(logDir, `app-${new Date().toISOString().split('T')[0]}.log`);
+        
+        // Append to log file
+        fs.appendFileSync(logFile, message + '\n');
+        
+        // For errors, also log to error file
+        if (level === 'error') {
+          const errorFile = path.join(logDir, `error-${new Date().toISOString().split('T')[0]}.log`);
+          fs.appendFileSync(errorFile, message + '\n');
+        }
+      }
+    } catch (error) {
+      // Fallback to console if file logging fails
+      console.error('Failed to log to file:', error);
+    }
+  }
+
+  // Public methods
+  error(message: string, meta?: any): void {
+    this.log('error', message, meta);
+  }
+
+  warn(message: string, meta?: any): void {
+    this.log('warn', message, meta);
+  }
+
+  info(message: string, meta?: any): void {
+    this.log('info', message, meta);
+  }
+
+  http(message: string, meta?: any): void {
+    this.log('http', message, meta);
+  }
+
+  debug(message: string, meta?: any): void {
+    this.log('debug', message, meta);
+  }
 }
 
-// Logger API
-const loggerAPI = {
-  error: (message: string, meta?: any) => logger.error(message, meta),
-  warn: (message: string, meta?: any) => logger.warn(message, meta),
-  info: (message: string, meta?: any) => logger.info(message, meta),
-  http: (message: string, meta?: any) => logger.http(message, meta),
-  debug: (message: string, meta?: any) => logger.debug(message, meta),
-};
+// Create and export a singleton instance
+const logger = new EdgeCompatibleLogger();
 
-export default loggerAPI;
+// Export the logger API
+export default logger;
 
-// Stream for Morgan HTTP request logger (server only)
+// Stream for HTTP request logging (for Node.js only)
 export const stream = {
   write: (message: string) => {
     logger.http(message.trim());

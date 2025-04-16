@@ -1,7 +1,26 @@
-import { parseStringPromise } from 'xml2js';
-import axios from 'axios';
-import redisClient from '../redis-client';
+import { parse, simplifyLostLess, XmlElement } from 'txml';
+import { getRedisClient } from '../redis-client';
 import { ApiError } from '../error-handler';
+
+// Cache handler implementation that works in both regular and edge environments
+async function getCacheValue<T>(key: string): Promise<T | null> {
+  try {
+    const redisClient = await getRedisClient();
+    return await redisClient.get<T>(key);
+  } catch (error) {
+    console.error('Failed to get cache value:', error);
+    return null;
+  }
+}
+
+async function setCacheValue<T>(key: string, value: T, ttl = 24 * 60 * 60): Promise<void> {
+  try {
+    const redisClient = await getRedisClient();
+    await redisClient.set(key, value, ttl);
+  } catch (error) {
+    console.error('Failed to set cache value:', error);
+  }
+}
 
 /**
  * URL data extracted from a sitemap
@@ -41,17 +60,23 @@ export interface ContentAnalysis {
  * @returns Parsed sitemap data
  */
 export async function fetchAndParseSitemap(sitemapUrl: string, recursive = true): Promise<SitemapData> {
+  const userAgent = 'LamontAI-Sitemap-Parser/1.0 (+https://lamontai.ai)';
   try {
     console.log(`Fetching sitemap from: ${sitemapUrl}`);
-    const response = await axios.get(sitemapUrl, {
+    const response = await fetch(sitemapUrl, {
       headers: {
-        'Accept': 'application/xml, text/xml, */*',
-        'User-Agent': 'LamontAI-Sitemap-Parser/1.0 (+https://lamontai.ai)'
-      },
-      timeout: 10000 // 10 second timeout
+        'Accept': 'application/xml, text/xml;q=0.9, */*;q=0.8',
+        'User-Agent': userAgent
+      }
     });
 
-    return parseSitemapXml(response.data, sitemapUrl, recursive);
+    if (!response.ok) {
+      throw new Error(`HTTP error ${response.status} fetching sitemap`);
+    }
+
+    const xmlContent = await response.text();
+
+    return parseSitemapXml(xmlContent, sitemapUrl, recursive);
   } catch (error) {
     console.error(`Error fetching sitemap ${sitemapUrl}:`, error);
     throw new ApiError(
@@ -70,28 +95,44 @@ export async function fetchAndParseSitemap(sitemapUrl: string, recursive = true)
  * @returns Parsed sitemap data
  */
 export async function parseSitemapXml(xmlContent: string, baseUrl: string, recursive = true): Promise<SitemapData> {
+  // Helper function to find the first element with a specific tag name
+  const findElement = (nodes: any[], tagName: string): any | null => {
+    return nodes.find(node => typeof node === 'object' && node !== null && node.tagName === tagName);
+  };
+
+  // Helper function to get text content from a node (handling potential array structure)
+  const getTextContent = (node: any): string | undefined => {
+    if (!node || !node.children || node.children.length === 0) return undefined;
+    // txml children are either strings or other nodes
+    const textNode = node.children.find((child: any) => typeof child === 'string');
+    return textNode ? String(textNode).trim() : undefined;
+  };
+
   try {
-    const result = await parseStringPromise(xmlContent, { 
-      explicitArray: false,
-      normalizeTags: true,
-      mergeAttrs: true
+    // Use txml.parse (synchronous and edge-compatible)
+    const parsedXml = parse(xmlContent, { 
+        keepWhitespace: false, // Reduce noise
+        noChildNodes: [], // Ensure nodes like <loc> have children arrays
     });
-    
+
+    const rootElement = parsedXml.find((node: string | XmlElement): node is XmlElement => typeof node === 'object' && node !== null);
+    if (!rootElement) {
+        throw new Error('Could not find root element in XML');
+    }
+
     // Check if this is a sitemap index
-    if (result.sitemapindex) {
-      const sitemapIndex = result.sitemapindex;
+    if (rootElement.tagName === 'sitemapindex') {
       const childSitemaps: string[] = [];
+      const sitemapNodes = rootElement.children
+        .filter((node: string | XmlElement): node is XmlElement => typeof node === 'object' && node !== null && node.tagName === 'sitemap');
       
-      // Extract child sitemap URLs
-      if (Array.isArray(sitemapIndex.sitemap)) {
-        sitemapIndex.sitemap.forEach((sitemap: any) => {
-          if (sitemap.loc) {
-            childSitemaps.push(sitemap.loc);
+      sitemapNodes.forEach((sitemapNode: XmlElement) => {
+          const locNode = findElement(sitemapNode.children, 'loc');
+          const loc = getTextContent(locNode);
+          if (loc) {
+            childSitemaps.push(loc);
           }
-        });
-      } else if (sitemapIndex.sitemap && sitemapIndex.sitemap.loc) {
-        childSitemaps.push(sitemapIndex.sitemap.loc);
-      }
+      });
       
       // If recursive, fetch all child sitemaps
       if (recursive && childSitemaps.length > 0) {
@@ -125,34 +166,40 @@ export async function parseSitemapXml(xmlContent: string, baseUrl: string, recur
     }
     
     // Regular sitemap
-    const urls: SitemapUrl[] = [];
-    
-    if (result.urlset && result.urlset.url) {
-      if (Array.isArray(result.urlset.url)) {
-        result.urlset.url.forEach((url: any) => {
-          if (url.loc) {
-            urls.push({
-              loc: url.loc,
-              lastmod: url.lastmod,
-              changefreq: url.changefreq,
-              priority: url.priority
-            });
-          }
-        });
-      } else if (result.urlset.url.loc) {
-        urls.push({
-          loc: result.urlset.url.loc,
-          lastmod: result.urlset.url.lastmod,
-          changefreq: result.urlset.url.changefreq,
-          priority: result.urlset.url.priority
-        });
-      }
+    if (rootElement.tagName === 'urlset') {
+      const urls: SitemapUrl[] = [];
+      const urlNodes = rootElement.children
+        .filter((node: string | XmlElement): node is XmlElement => typeof node === 'object' && node !== null && node.tagName === 'url');
+
+      urlNodes.forEach((urlNode: XmlElement) => {
+        const locNode = findElement(urlNode.children, 'loc');
+        const loc = getTextContent(locNode);
+
+        if (loc) {
+          const lastmodNode = findElement(urlNode.children, 'lastmod');
+          const changefreqNode = findElement(urlNode.children, 'changefreq');
+          const priorityNode = findElement(urlNode.children, 'priority');
+          
+          urls.push({
+            loc: loc,
+            lastmod: getTextContent(lastmodNode),
+            changefreq: getTextContent(changefreqNode),
+            priority: getTextContent(priorityNode)
+          });
+        }
+      });
+
+      return {
+        urls,
+        isIndex: false
+      };
+    } else {
+        // Handle cases where the root isn't <sitemapindex> or <urlset>
+        // Could be a single URL entry or an unexpected format.
+        // For now, return empty if not recognized.
+        console.warn(`Unexpected root element found: ${rootElement.tagName}`);
+        return { urls: [], isIndex: false };
     }
-    
-    return {
-      urls,
-      isIndex: false
-    };
   } catch (error) {
     console.error('Error parsing sitemap XML:', error);
     throw new ApiError(
@@ -168,76 +215,109 @@ export async function parseSitemapXml(xmlContent: string, baseUrl: string, recur
  * @returns Content analysis results
  */
 export async function analyzeUrlContent(url: string): Promise<ContentAnalysis> {
-  // Use Redis cache key for URL content analysis
+  const userAgent = 'LamontAI-Content-Analyzer/1.0 (+https://lamontai.ai)';
   const cacheKey = `url_analysis:${url}`;
   
   try {
     // Check cache first to avoid repeated analysis of the same URL
-    const cachedAnalysis = await redisClient.get<ContentAnalysis>(cacheKey);
-    if (cachedAnalysis) {
-      return cachedAnalysis;
-    }
+    // const cachedAnalysis = await getCacheValue<ContentAnalysis>(cacheKey);
+    // if (cachedAnalysis) {
+    //   console.log(`Using cached analysis for: ${url}`);
+    //   return cachedAnalysis;
+    // } // Temporarily disable caching for testing fetch
     
     console.log(`Analyzing content from URL: ${url}`);
-    const response = await axios.get(url, {
+    const response = await fetch(url, {
       headers: {
-        'Accept': 'text/html,application/xhtml+xml',
-        'User-Agent': 'LamontAI-Content-Analyzer/1.0 (+https://lamontai.ai)'
-      },
-      timeout: 15000 // 15 second timeout
-    });
-    
-    // This is a simplified analysis - in a real implementation, you would:
-    // 1. Parse the HTML properly (using cheerio or similar)
-    // 2. Extract title, headings, meta tags, etc.
-    // 3. Do proper keyword extraction and readability analysis
-    
-    const content = response.data;
-    
-    // Extract title (simple regex approach)
-    const titleMatch = /<title>(.*?)<\/title>/i.exec(content);
-    const title = titleMatch ? titleMatch[1] : undefined;
-    
-    // Extract headings (simple regex approach)
-    const headingMatches = content.match(/<h[1-6][^>]*>(.*?)<\/h[1-6]>/gi) || [];
-    const headings = headingMatches.map((h: string) => {
-      return h.replace(/<\/?[^>]+(>|$)/g, '').trim();
-    });
-    
-    // Simple keyword extraction (just common words, not a real implementation)
-    const bodyText = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
-    const words = bodyText.toLowerCase().split(/\W+/).filter((w: string) => w.length > 3);
-    const wordCounts: Record<string, number> = {};
-    
-    words.forEach((word: string) => {
-      if (wordCounts[word]) {
-        wordCounts[word]++;
-      } else {
-        wordCounts[word] = 1;
+        'Accept': 'text/html,application/xhtml+xml;q=0.9,*/*;q=0.8',
+        'User-Agent': userAgent
       }
     });
     
-    const keywords = Object.entries(wordCounts)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 10)
-      .map(([word]) => word);
+    if (!response.ok) {
+      throw new Error(`HTTP error ${response.status} fetching content`);
+    }
     
-    const analysis = {
+    const content = await response.text();
+    
+    // Extract title (simple regex approach with type safety)
+    let title: string | undefined = undefined;
+    try {
+      const titleMatch = content && /<title>(.*?)<\/title>/i.exec(content);
+      title = titleMatch && titleMatch[1] ? titleMatch[1] : undefined;
+    } catch (err) {
+      console.error('Error extracting title:', err);
+    }
+    
+    // Extract headings (simple regex approach with error handling)
+    let headings: string[] = [];
+    try {
+      if (content) {
+        const headingMatches = content.match(/<h[1-6][^>]*>(.*?)<\/h[1-6]>/gi) || [];
+        headings = headingMatches.map((h: string) => {
+          return h.replace(/<\/?[^>]+(>|$)/g, '').trim();
+        });
+      }
+    } catch (err) {
+      console.error('Error extracting headings:', err);
+      headings = [];
+    }
+    
+    // Simple keyword extraction with error handling
+    let keywords: string[] = [];
+    let wordCount = 0;
+    
+    try {
+      if (content) {
+        const bodyText = content.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+        // Safe splitting to prevent TypeError
+        const words = bodyText && typeof bodyText === 'string' 
+          ? bodyText.toLowerCase().match(/\b\w+\b/g)
+          : [];
+        
+        if (words) { // Check if words is not null
+          wordCount = words.length;
+          
+          // Basic keyword frequency analysis (top 5 simple words)
+          const wordCounts: Record<string, number> = {};
+          
+          words.forEach((word: string) => {
+            if (word && typeof word === 'string') {
+              if (wordCounts[word]) {
+                wordCounts[word]++;
+              } else {
+                wordCounts[word] = 1;
+              }
+            }
+          });
+          
+          keywords = Object.entries(wordCounts)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 5) // Get top 5
+            .map(([word]) => word);
+        }
+      }
+    } catch (err) {
+      console.error('Error analyzing text content:', err);
+      keywords = [];
+      wordCount = 0;
+    }
+    
+    const analysisResult: ContentAnalysis = {
       url,
       title,
       keywords,
       headings,
-      wordCount: words.length,
-      // Placeholder for readability score
-      readabilityScore: 0
+      wordCount,
+      // readabilityScore: 0, // Placeholder for future implementation
     };
     
-    // Cache the analysis result (24 hour TTL)
-    await redisClient.set(cacheKey, analysis, 24 * 60 * 60);
+    // Cache the result
+    // await setCacheValue(cacheKey, analysisResult, 24 * 60 * 60); // Temporarily disable caching for testing fetch
     
-    return analysis;
+    return analysisResult;
   } catch (error) {
-    console.error(`Error analyzing URL ${url}:`, error);
+    console.error(`Error analyzing content for ${url}:`, error);
     return {
       url,
       keywords: [],
@@ -262,62 +342,141 @@ export async function findRelevantInternalLinks(
   const cacheKey = `relevant_links:${topic}:${maxResults}:${sitemapData.urls.length}`;
   
   // Check cache first
-  const cachedLinks = await redisClient.get<string[]>(cacheKey);
+  const cachedLinks = await getCacheValue<string[]>(cacheKey);
   if (cachedLinks) {
     return cachedLinks;
   }
   
+  // Ensure topic is a string to prevent TypeError
+  const safeTopicStr = typeof topic === 'string' ? topic : String(topic || '');
+  
   // Convert topic to lowercase for case-insensitive matching
-  const lowerTopic = topic.toLowerCase();
+  const lowerTopic = safeTopicStr.toLowerCase();
   
   // Filter URLs by relevance to topic (very simple approach)
   const relevantUrls = sitemapData.urls.filter(url => {
-    const urlPath = new URL(url.loc).pathname.toLowerCase();
-    
-    // Check if URL path contains the topic
-    return urlPath.includes(lowerTopic) || 
-           // Or a hyphenated version of the topic
-           urlPath.includes(lowerTopic.replace(/\s+/g, '-')) ||
-           // Or an underscore version of the topic
-           urlPath.includes(lowerTopic.replace(/\s+/g, '_'));
+    try {
+      // Make sure url.loc is a valid string
+      if (!url.loc || typeof url.loc !== 'string') {
+        return false;
+      }
+      
+      // Safely parse URL - if it fails, just use the raw string
+      let urlPath: string;
+      try {
+        const parsedUrl = new URL(url.loc);
+        urlPath = parsedUrl.pathname.toLowerCase();
+      } catch (e) {
+        // If URL parsing fails, just use the raw URL as a string
+        urlPath = url.loc.toLowerCase();
+      }
+      
+      // Check if URL path contains the topic
+      if (!urlPath || typeof urlPath !== 'string') {
+        return false;
+      }
+      
+      if (lowerTopic && urlPath.includes(lowerTopic)) {
+        return true;
+      }
+      
+      // Check for hyphenated version of the topic
+      const hyphenatedTopic = lowerTopic.replace(/\s+/g, '-');
+      if (hyphenatedTopic && urlPath.includes(hyphenatedTopic)) {
+        return true;
+      }
+      
+      // Check for underscore version of the topic
+      const underscoreTopic = lowerTopic.replace(/\s+/g, '_');
+      if (underscoreTopic && urlPath.includes(underscoreTopic)) {
+        return true;
+      }
+      
+      return false;
+    } catch (error) {
+      console.error('Error processing URL for relevance:', error);
+      return false;
+    }
   });
   
   // Sort by priority (if available) and return top results
   const sortedUrls = relevantUrls.sort((a, b) => {
-    // Sort by priority if available
-    if (a.priority && b.priority) {
-      return parseFloat(b.priority) - parseFloat(a.priority);
+    try {
+      // Sort by priority if available
+      if (a.priority && b.priority && 
+          typeof a.priority === 'string' && 
+          typeof b.priority === 'string') {
+        return parseFloat(b.priority) - parseFloat(a.priority);
+      }
+      
+      // Safe URL parsing
+      let aPath: string = '', bPath: string = '';
+      
+      if (a.loc && typeof a.loc === 'string') {
+        try {
+          aPath = new URL(a.loc).pathname;
+        } catch (e) {
+          aPath = a.loc;
+        }
+      }
+      
+      if (b.loc && typeof b.loc === 'string') {
+        try {
+          bPath = new URL(b.loc).pathname;
+        } catch (e) {
+          bPath = b.loc;
+        }
+      }
+      
+      // Default to URL path length (shorter = more relevant)
+      return (aPath?.length || 0) - (bPath?.length || 0);
+    } catch (error) {
+      console.error('Error sorting URLs:', error);
+      return 0;
     }
-    
-    // Default to URL path length (shorter = more relevant)
-    const aPath = new URL(a.loc).pathname;
-    const bPath = new URL(b.loc).pathname;
-    return aPath.length - bPath.length;
   });
   
-  const result = sortedUrls.slice(0, maxResults).map(url => url.loc);
+  // Safely map URLs to results
+  const result = sortedUrls
+    .slice(0, maxResults)
+    .map(url => url.loc)
+    .filter((loc): loc is string => typeof loc === 'string');
   
   // Cache the results (1 hour TTL)
-  await redisClient.set(cacheKey, result, 60 * 60);
+  await setCacheValue(cacheKey, result, 60 * 60);
   
   return result;
 }
 
 /**
- * Get sitemap data from cache or fetch if not cached
+ * Get cached sitemap data for a URL or fetch if not in cache
  * @param sitemapUrl - URL of the sitemap
- * @returns Cached or freshly fetched sitemap data
+ * @returns The sitemap data
  */
 export async function getCachedSitemapData(sitemapUrl: string): Promise<SitemapData> {
-  // Redis cache key
+  // Cache key for the sitemap
   const cacheKey = `sitemap:${sitemapUrl}`;
   
-  // Use the getOrSet pattern - gets from cache or fetches and caches
-  return redisClient.getOrSet<SitemapData>(
-    cacheKey,
-    async () => fetchAndParseSitemap(sitemapUrl),
-    12 * 60 * 60 // 12-hour TTL
-  );
+  try {
+    // Try to get from cache first
+    const cachedData = await getCacheValue<SitemapData>(cacheKey);
+    if (cachedData) {
+      console.log(`Using cached sitemap data for ${sitemapUrl}`);
+      return cachedData;
+    }
+    
+    // Not in cache, fetch and parse
+    console.log(`Fetching fresh sitemap data for ${sitemapUrl}`);
+    const sitemapData = await fetchAndParseSitemap(sitemapUrl);
+    
+    // Cache for 12 hours
+    await setCacheValue(cacheKey, sitemapData, 12 * 60 * 60);
+    
+    return sitemapData;
+  } catch (error) {
+    console.error(`Error getting cached sitemap data for ${sitemapUrl}:`, error);
+    throw error;
+  }
 }
 
 /**
@@ -335,7 +494,7 @@ export async function initializeUserSitemap(userId: string, sitemapUrl: string):
     console.log(`Initialized sitemap for user ${userId} with ${sitemapData.urls.length} URLs`);
     
     // Cache the user's sitemap association
-    await redisClient.set(`user_sitemap:${userId}`, { url: sitemapUrl, urlCount: sitemapData.urls.length });
+    await setCacheValue(`user_sitemap:${userId}`, { url: sitemapUrl, urlCount: sitemapData.urls.length });
     
     // In a real implementation, you might store parsed data in a database
     // e.g., db.sitemapData.create({ userId, urlCount: sitemapData.urls.length, ... })

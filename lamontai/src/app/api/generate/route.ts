@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { withApiMiddleware } from '@/lib/api-middleware';
-import { getServerSession } from 'next-auth/next';
-import { authOptions } from '@/lib/auth-config';
-import '@/lib/auth-types'; // Import the type declarations
+import { withAuth } from '@/lib/api-middleware';
+import { getUserIdFromRequest } from '@/lib/server-auth-utils';
 import { generateContentSchema, validateRequest, formatZodErrors } from '@/lib/validation';
 import { PLAN_LIMITS, USER_PLANS } from '@/lib/api-config';
 import { handleApiError } from '@/lib/error-handler';
+
+// Configure for nodejs runtime
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 // Mock response for local development
 const mockGeneratedContent = {
@@ -20,19 +22,12 @@ const mockGeneratedContent = {
 /**
  * API route handler for generating content
  */
-async function handler(req: NextRequest) {
-  if (req.method !== 'POST') {
-    return NextResponse.json(
-      { success: false, error: 'Method not allowed' },
-      { status: 405 }
-    );
-  }
-
+export async function POST(req: NextRequest) {
   try {
-    // Check authentication
-    const session = await getServerSession(authOptions);
+    // Check authentication using more robust method
+    const userId = await getUserIdFromRequest(req);
     
-    if (!session || !session.user) {
+    if (!userId) {
       return NextResponse.json({
         success: false,
         message: "Authentication required"
@@ -40,7 +35,16 @@ async function handler(req: NextRequest) {
     }
 
     // Parse and validate the request data
-    const requestData = await req.json();
+    let requestData;
+    try {
+      requestData = await req.json();
+    } catch (e) {
+      return NextResponse.json({
+        success: false,
+        message: "Invalid JSON in request body"
+      }, { status: 400 });
+    }
+    
     const validationResult = validateRequest(generateContentSchema, requestData);
 
     if (!validationResult.success) {
@@ -57,16 +61,11 @@ async function handler(req: NextRequest) {
     let userPlan = 'free';
     let articlesGenerated = 0;
     
-    if (session && session.user) {
-      // Add type assertion here
-      const userId = (session.user as any).id;
-      // Lookup user plan from database
-      // In production, you'd fetch this from your database
-      userPlan = USER_PLANS[userId as keyof typeof USER_PLANS] || 'free';
+    // In production, you'd fetch this from your database
+    userPlan = USER_PLANS[userId as keyof typeof USER_PLANS] || 'free';
       
-      // Mock usage tracking - in real app, get from database
-      articlesGenerated = 3;
-    }
+    // Mock usage tracking - in real app, get from database
+    articlesGenerated = 3;
     
     // Check if user has reached their article generation limit
     const planLimits = PLAN_LIMITS[userPlan as keyof typeof PLAN_LIMITS];
@@ -91,7 +90,4 @@ async function handler(req: NextRequest) {
   } catch (error) {
     return handleApiError(error, req);
   }
-}
-
-// Export the handler with middleware
-export const POST = withApiMiddleware(handler); 
+} 

@@ -5,7 +5,7 @@
 
 import { NextRequest } from 'next/server';
 import { getTokenFromRequestEdge, verifyJWTEdge } from '@/lib/auth-utils-edge';
-import { getNeonPrismaClient } from '@/lib/prisma-cloudflare';
+import { getPrismaForEnvironment } from '@/lib/prisma-cloudflare';
 
 // Specify Edge runtime
 export const runtime = 'edge';
@@ -14,6 +14,8 @@ export const runtime = 'edge';
 export const dynamic = 'force-dynamic';
 
 export async function GET(request: NextRequest) {
+  // Get the correct Prisma client for the environment (edge in this case)
+  const prisma = getPrismaForEnvironment();
   try {
     // Extract JWT token from request
     const token = getTokenFromRequestEdge(request);
@@ -42,7 +44,6 @@ export async function GET(request: NextRequest) {
     }
     
     // Get user data
-    const prisma = await getNeonPrismaClient();
     const user = await prisma.user.findUnique({
       where: { id: payload.sub as string },
       select: {
@@ -78,7 +79,7 @@ export async function GET(request: NextRequest) {
     );
   } catch (error) {
     console.error('Error in auth/me endpoint:', error);
-    
+    // Disconnect is not typically needed/available for Accelerate client
     return new Response(
       JSON.stringify({ 
         error: 'Internal server error',

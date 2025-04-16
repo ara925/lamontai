@@ -6,7 +6,7 @@ import {
 } from './api-config';
 import axios, { AxiosError, AxiosRequestConfig } from 'axios';
 import logger from './logger';
-import redisClient from './redis-client';
+import { getRedisClient } from './redis-client';
 import { createCircuitBreaker } from './redis/circuit-breaker';
 const cache = require('./redis/redis-cache');
 

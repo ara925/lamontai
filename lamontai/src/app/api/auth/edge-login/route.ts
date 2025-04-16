@@ -4,7 +4,7 @@
  */
 
 import { NextRequest } from 'next/server';
-import { getNeonPrismaClient } from '@/lib/prisma-cloudflare';
+import { getPrismaForEnvironment } from '@/lib/prisma-cloudflare';
 import { comparePasswordEdge, generateJwtToken, setAuthCookie } from '@/lib/auth-utils-edge';
 
 // Specify Edge runtime
@@ -17,6 +17,8 @@ export const dynamic = 'force-dynamic';
  * POST handler for user login
  */
 export async function POST(request: NextRequest) {
+  // Get the correct Prisma client for the environment (edge in this case)
+  const prisma = getPrismaForEnvironment();
   try {
     // Parse request body
     const data = await request.json();
@@ -32,9 +34,6 @@ export async function POST(request: NextRequest) {
         }
       );
     }
-    
-    // Get database client optimized for Cloudflare
-    const prisma = await getNeonPrismaClient();
     
     // Find user by email
     const user = await prisma.user.findUnique({
@@ -105,7 +104,10 @@ export async function POST(request: NextRequest) {
     return response;
   } catch (error) {
     console.error('Error in edge login API:', error);
-    
+    // Disconnect is not typically needed/available for Accelerate client
+    // if (prisma && typeof prisma.$disconnect === 'function') { 
+    //   await prisma.$disconnect().catch(console.error);
+    // }
     return new Response(
       JSON.stringify({ 
         error: 'Internal server error',

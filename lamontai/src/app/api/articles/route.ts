@@ -1,82 +1,83 @@
 // export const runtime = 'nodejs'; // Remove runtime config
 
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import { getDatabaseClient } from '@/lib/db'; // Import getter
 import { getUserIdFromRequest } from '@/lib/server-auth-utils';
+
+// Mark this route as dynamic since it accesses request properties
+export const dynamic = 'force-dynamic';
+
+// Specify the runtime
+export const runtime = 'nodejs';
 
 // GET /api/articles - Get all articles for user
 export async function GET(request: NextRequest) {
-  const userId = await getUserIdFromRequest(request);
-  
-  if (!userId) {
-    return NextResponse.json(
-      { success: false, message: 'Unauthorized' },
-      { status: 401 }
-    );
-  }
-  
   try {
-    // Extract query parameters
-    const url = new URL(request.url);
-    const contentPlanId = url.searchParams.get('contentPlanId');
-    const status = url.searchParams.get('status');
+    const db = await getDatabaseClient(); // Await client
+    const userId = await getUserIdFromRequest(request);
+    if (!userId) {
+      return NextResponse.json({ message: "Authentication required" }, { status: 401 });
+    }
+
+    const { searchParams } = new URL(request.url);
+    const contentPlanId = searchParams.get('contentPlanId');
     
-    // Build where clause
-    const where: any = { userId };
-    if (contentPlanId) where.contentPlanId = contentPlanId;
-    if (status) where.status = status;
-    
-    // Find all articles for user with optional filters
+    const whereClause: any = { userId };
+    if (contentPlanId) {
+      whereClause.contentPlanId = contentPlanId;
+    }
+
     const articles = await db.article.findMany({
-      where,
-      orderBy: { updatedAt: 'desc' }
+      where: whereClause,
+      orderBy: { createdAt: 'desc' },
+      select: { // Select only necessary fields for list view
+        id: true,
+        title: true,
+        status: true,
+        createdAt: true,
+        updatedAt: true,
+        contentPlanId: true,
+      }
     });
-    
-    return NextResponse.json(
-      { success: true, data: articles },
-      { status: 200 }
-    );
+
+    return NextResponse.json(articles);
   } catch (error) {
-    console.error('Error fetching articles:', error);
-    return NextResponse.json(
-      { success: false, message: 'Error fetching articles' },
-      { status: 500 }
-    );
+    console.error("Failed to fetch articles:", error);
+    return NextResponse.json({ message: "Failed to fetch articles" }, { status: 500 });
   }
 }
 
 // POST /api/articles - Create a new article
 export async function POST(request: NextRequest) {
   try {
+    const db = await getDatabaseClient(); // Await client
     const userId = await getUserIdFromRequest(request);
-    
     if (!userId) {
-      return NextResponse.json(
-        { success: false, message: 'Unauthorized' },
-        { status: 401 }
-      );
+      return NextResponse.json({ message: "Authentication required" }, { status: 401 });
     }
-    
+
     const body = await request.json();
+    const { title, content, status, contentPlanId } = body;
     
-    // Create a new article with minimal fields to avoid type issues
-    const article = await db.article.create({
+    // Validate required fields
+    if (!title) {
+        return NextResponse.json({ message: "Title is required" }, { status: 400 });
+    }
+
+    const newArticle = await db.article.create({
       data: {
-        title: body.title,
-        content: body.content || '',
-        userId: userId
-      }
+        title,
+        content: content || '', // Default empty string if null/undefined
+        status: status || 'draft', // Default to draft if not provided
+        userId,
+        contentPlanId,
+        publishedAt: status === 'published' ? new Date() : null,
+      },
     });
-    
-    return NextResponse.json(
-      { success: true, data: article },
-      { status: 201 }
-    );
+
+    return NextResponse.json(newArticle, { status: 201 });
   } catch (error) {
-    console.error('Error creating article:', error);
-    return NextResponse.json(
-      { success: false, message: 'Error creating article' },
-      { status: 500 }
-    );
+    console.error("Failed to create article:", error);
+    return NextResponse.json({ message: "Failed to create article" }, { status: 500 });
   }
 } 

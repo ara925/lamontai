@@ -1,4 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+// Specify the runtime
+export const runtime = 'nodejs';
+
+// Mark this route as dynamic since it accesses request properties
+export const dynamic = 'force-dynamic';
 import { z } from 'zod';
 import { signIn } from 'next-auth/react';
 import { users } from '@/lib/mock-data';
@@ -54,7 +60,7 @@ export async function POST(request: NextRequest) {
         { 
           status: 200,
           headers: {
-            'Set-Cookie': `sessionToken=dummy-session-${Date.now()}; Path=/; HttpOnly; SameSite=Lax`
+            'Set-Cookie': `token=dummy-session-${Date.now()}; Path=/; HttpOnly; SameSite=Lax`
           }
         }
       );

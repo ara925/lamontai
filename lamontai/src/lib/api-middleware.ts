@@ -1,182 +1,100 @@
-import jwt from 'jsonwebtoken';
+import * as jose from 'jose';
 import { NextRequest, NextResponse } from 'next/server';
-import compression from 'compression';
-import { prisma } from './db';
-import logger from './logger';
+import { getDatabaseClient } from './db';
 
 /**
- * API middleware for adding security headers, compression, and timeout handling
+ * Custom middleware for API routes
  */
-
-/**
- * Add security headers to API responses
- */
-export function withSecurityHeaders(handler: any) {
-  return async (req: NextRequest, ...args: any[]) => {
-    const response = await handler(req, ...args);
-    
-    // Only add security headers to API responses
-    if (response && response instanceof NextResponse) {
-      // Add security headers
-      response.headers.set('X-Content-Type-Options', 'nosniff');
-      response.headers.set('X-XSS-Protection', '1; mode=block');
-      response.headers.set('X-Frame-Options', 'DENY');
-      response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
-      response.headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
-    }
-    
-    return response;
-  };
-}
-
-/**
- * Add response compression for API responses
- */
-export function withCompression(handler: any) {
-  return async (req: NextRequest, ...args: any[]) => {
+export function withAuth(handler: (req: NextRequest, userId: string) => Promise<NextResponse>) {
+  return async (req: NextRequest) => {
     try {
-      // For Next.js App Router, compression is handled at the infrastructure level
-      // This is a placeholder to maintain the middleware chain
-      return await handler(req, ...args);
-    } catch (error) {
-      console.error('API compression middleware error:', error);
-      
-      // Ensure we return JSON errors, not HTML
-      return new NextResponse(
-        JSON.stringify({ 
-          success: false, 
-          message: 'An error occurred processing the request',
-          error: error instanceof Error ? error.message : 'Unknown error'
-        }),
-        { 
-          status: 500, 
-          headers: { 'Content-Type': 'application/json' } 
-        }
-      );
-    }
-  };
-}
+      // Extract token from Authorization header
+      const authHeader = req.headers.get('Authorization');
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+      }
 
-/**
- * Add request timeout handling
- * @param timeoutMs Maximum time in milliseconds before timing out the request
- */
-export function withTimeout(timeoutMs = 30000) {
-  return (handler: any) => {
-    return async (req: NextRequest, ...args: any[]) => {
-      return Promise.race([
-        handler(req, ...args),
-        new Promise<NextResponse>((_, reject) => 
-          setTimeout(() => {
-            reject(
-              new NextResponse(
-                JSON.stringify({ 
-                  success: false,
-                  error: 'Request timeout',
-                  message: 'The server took too long to respond'
-                }),
-                { status: 504, headers: { 'Content-Type': 'application/json' } }
-              )
-            );
-          }, timeoutMs)
-        )
-      ]).catch(error => {
-        if (error instanceof NextResponse) {
-          return error;
+      // Use safer substring method instead of split
+      const token = authHeader.substring(7); // 'Bearer '.length === 7
+      
+      // Verify token using jose
+      try {
+        const jwtSecret = process.env.JWT_SECRET;
+        if (!jwtSecret) {
+          console.error('JWT_SECRET environment variable is not set');
+          return NextResponse.json({ error: 'Server configuration error' }, { status: 500 });
         }
         
-        console.error('API request error:', error);
-        return new NextResponse(
-          JSON.stringify({
-            success: false,
-            error: 'Internal Server Error',
-            message: 'An unexpected error occurred'
-          }),
-          { status: 500, headers: { 'Content-Type': 'application/json' } }
-        );
-      });
-    };
-  };
-}
-
-/**
- * Add CORS headers to API responses
- */
-export function withCors(handler: any) {
-  return async (req: NextRequest, ...args: any[]) => {
-    // Check if preflight OPTIONS request
-    if (req.method === 'OPTIONS') {
-      return new NextResponse(null, {
-        status: 204,
-        headers: {
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-          'Access-Control-Max-Age': '86400'
+        const encodedSecret = new TextEncoder().encode(jwtSecret);
+        const { payload } = await jose.jwtVerify(token, encodedSecret, {
+          algorithms: ['HS256']
+        });
+        
+        // Check required claims
+        if (!payload.id || typeof payload.id !== 'string') {
+          return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
         }
-      });
-    }
-    
-    // Handle the request normally
-    const response = await handler(req, ...args);
-    
-    // Add CORS headers to the response
-    if (response && response instanceof NextResponse) {
-      response.headers.set('Access-Control-Allow-Origin', '*');
-    }
-    
-    return response;
-  };
-}
-
-/**
- * Monitor and log API performance metrics
- */
-export function withPerformanceMetrics(handler: any) {
-  return async (req: NextRequest, ...args: any[]) => {
-    const startTime = Date.now();
-    const url = req.url;
-    const method = req.method;
-    
-    try {
-      // Process the request
-      const response = await handler(req, ...args);
-      
-      // Calculate performance metrics
-      const endTime = Date.now();
-      const duration = endTime - startTime;
-      
-      // Add performance headers
-      if (response && response instanceof NextResponse) {
-        response.headers.set('X-Response-Time', `${duration}ms`);
+        
+        // Call the original handler with userId
+        return handler(req, payload.id as string);
+      } catch (error) {
+        console.error('Token verification error:', error);
+        return NextResponse.json({ error: 'Invalid or expired token' }, { status: 401 });
       }
-      
-      // Log the metrics
-      console.log(`[API] ${method} ${url} completed in ${duration}ms`);
-      
-      return response;
     } catch (error) {
-      // Log error with performance info
-      const endTime = Date.now();
-      const duration = endTime - startTime;
-      console.error(`[API] ${method} ${url} failed after ${duration}ms:`, error);
-      
-      throw error;
+      console.error('API middleware error:', error);
+      return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
     }
   };
 }
 
 /**
- * Combined middleware for API routes
+ * Middleware to check user permissions
  */
-export function withApiMiddleware(handler: any) {
-  return withSecurityHeaders(
-    withCompression(
-      withCors(
-        withTimeout(30000)(
-          withPerformanceMetrics(handler)
-        )
-      )
-    )
-  );
+export function withRole(handler: (req: NextRequest, userId: string) => Promise<NextResponse>, role: string) {
+  return async (req: NextRequest) => {
+    try {
+      // Extract token from Authorization header
+      const authHeader = req.headers.get('Authorization');
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+      }
+
+      // Use safer substring method instead of split
+      const token = authHeader.substring(7); // 'Bearer '.length === 7
+      
+      // Verify token using jose
+      try {
+        const jwtSecret = process.env.JWT_SECRET;
+        if (!jwtSecret) {
+          console.error('JWT_SECRET environment variable is not set');
+          return NextResponse.json({ error: 'Server configuration error' }, { status: 500 });
+        }
+        
+        const encodedSecret = new TextEncoder().encode(jwtSecret);
+        const { payload } = await jose.jwtVerify(token, encodedSecret, {
+          algorithms: ['HS256']
+        });
+        
+        // Check required claims
+        if (!payload.id || !payload.role || typeof payload.id !== 'string') {
+          return NextResponse.json({ error: 'Invalid token' }, { status: 401 });
+        }
+        
+        // Check role
+        if (payload.role !== role) {
+          return NextResponse.json({ error: 'Insufficient permissions' }, { status: 403 });
+        }
+        
+        // Call the original handler with userId
+        return handler(req, payload.id as string);
+      } catch (error) {
+        console.error('Token verification error:', error);
+        return NextResponse.json({ error: 'Invalid or expired token' }, { status: 401 });
+      }
+    } catch (error) {
+      console.error('API middleware error:', error);
+      return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
+    }
+  };
 } 

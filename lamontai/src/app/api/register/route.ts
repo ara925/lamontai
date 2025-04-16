@@ -1,4 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server';
+
+// Specify the runtime
+export const runtime = 'nodejs';
+
+// Mark this route as dynamic since it accesses request properties
+export const dynamic = 'force-dynamic';
 import { hash } from 'bcryptjs';
 import { PrismaClient } from '@prisma/client';
 import { z } from 'zod';

@@ -98,31 +98,30 @@ function writeEnvFile(filePath, content) {
 function installDependencies() {
   log('Installing required dependencies for Cloudflare deployment...', colors.magenta);
 
-  // Install dev dependencies
-  if (CONFIG.packages.dev.length > 0) {
-    const devCommand = `npm install --save-dev ${CONFIG.packages.dev.join(' ')}`;
-    executeCommand(devCommand);
-  }
+  // // Install dev dependencies // COMMENTED OUT
+  // if (CONFIG.packages.dev.length > 0) { // COMMENTED OUT
+  //   const devCommand = `npm install --save-dev ${CONFIG.packages.dev.join(' ')}`; // COMMENTED OUT
+  //   executeCommand(devCommand); // COMMENTED OUT
+  // } // COMMENTED OUT
+  // // Install production dependencies // COMMENTED OUT
+  // if (CONFIG.packages.prod.length > 0) { // COMMENTED OUT
+  //   const prodCommand = `npm install --save ${CONFIG.packages.prod.join(' ')}`; // COMMENTED OUT
+  //   executeCommand(prodCommand); // COMMENTED OUT
+  // } // COMMENTED OUT
+  // // Install polyfills // COMMENTED OUT
+  // log('Installing required polyfills for Cloudflare compatibility...', colors.magenta); // COMMENTED OUT
+  // const polyfillCommand = `npm install --save-dev ${CONFIG.polyfills.join(' ')}`; // COMMENTED OUT
+  // executeCommand(polyfillCommand); // COMMENTED OUT
 
-  // Install production dependencies
-  if (CONFIG.packages.prod.length > 0) {
-    const prodCommand = `npm install --save ${CONFIG.packages.prod.join(' ')}`;
-    executeCommand(prodCommand);
-  }
-
-  // Install polyfills
-  log('Installing required polyfills for Cloudflare compatibility...', colors.magenta);
-  const polyfillCommand = `npm install --save-dev ${CONFIG.polyfills.join(' ')}`;
-  executeCommand(polyfillCommand);
-
-  log('All dependencies installed successfully!', colors.green);
+  log('Skipping internal dependency installation (should be done beforehand).', colors.yellow); // Added log message
+  // log('All dependencies installed successfully!', colors.green); // Commented out original success message
 }
 
 function createCloudflareEnvFile() {
   log('Creating Cloudflare environment file...', colors.magenta);
 
   // Load current environment variables
-  require('dotenv').config({ path: '.env.local' });
+  // require('dotenv').config({ path: '.env.local' }); // COMMENTED OUT - Assuming vars are already in process.env for prod build
 
   // Check for required environment variables
   const missingVars = CONFIG.requiredEnvVars.filter(varName => !process.env[varName]);

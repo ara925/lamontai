@@ -1,33 +1,42 @@
 /**
- * Node.js compatible Users API endpoint
- * This API route is designed to run in the Node.js runtime
- * and can use the full Node.js API
+ * Edge-compatible Users API endpoint
+ * This API route uses edge-compatible functions and avoids Node.js specific APIs
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { PrismaClient } from '@prisma/client';
-import { getServerSession } from 'next-auth/next';
-import { authOptions } from '@/lib/auth-config';
-import { compare, hash } from 'bcryptjs';
+import { getUserIdFromRequest } from '@/lib/server-auth-utils';
+import { createNeonAdapter } from '@/lib/driver-adapters/prisma-neon';
+// Import edge-compatible hashing function explicitly
+import { hashPasswordEdge } from '@/lib/auth-utils-edge';
 
-// Specify Node.js runtime explicitly
-export const runtime = 'nodejs';
+// Specify Edge runtime explicitly
+export const runtime = 'edge';
 
 // Use dynamic rendering to ensure fresh data
 export const dynamic = 'force-dynamic';
 
-// Create a Prisma client for Node.js
-const prisma = new PrismaClient();
+/**
+ * Get Prisma client optimized for edge runtime
+ */
+async function getEdgePrismaClient() {
+  const adapter = createNeonAdapter();
+  return new PrismaClient({ adapter });
+}
 
 /**
  * GET handler for retrieving users with full capabilities
  */
 export async function GET(request: NextRequest) {
   try {
-    // Get server session using NextAuth
-    const session = await getServerSession(authOptions);
+    // Get edge-optimized Prisma client
+    const db = await getEdgePrismaClient();
+
+    // Get user ID using edge-compatible method
+    const userId = await getUserIdFromRequest(request);
     
-    if (!session?.user) {
+    if (!userId) {
+      await db.$disconnect().catch(console.error);
       return NextResponse.json(
         { error: 'Authentication required' },
         { status: 401 }
@@ -35,7 +44,13 @@ export async function GET(request: NextRequest) {
     }
     
     // Check if the user has admin privileges
-    if (session.user.role !== 'admin') {
+    const currentUser = await db.user.findUnique({
+      where: { id: userId },
+      select: { role: true }
+    });
+    
+    if (!currentUser || currentUser.role !== 'admin') {
+      await db.$disconnect().catch(console.error);
       return NextResponse.json(
         { error: 'Admin privileges required' },
         { status: 403 }
@@ -64,33 +79,37 @@ export async function GET(request: NextRequest) {
     }
     
     // Fetch users with pagination
-    const [users, total] = await Promise.all([
-      prisma.user.findMany({
-        where: whereClause,
-        skip,
-        take: limit,
-        select: {
-          id: true,
-          name: true,
-          email: true,
-          role: true,
-          createdAt: true,
-          updatedAt: true,
-          // Include related settings with fields from the schema
-          settings: {
-            select: {
-              id: true,
-              theme: true,
-              language: true,
-              websiteUrl: true,
-              businessDescription: true
-            }
+    const users = await db.user.findMany({
+      where: whereClause,
+      skip,
+      take: limit,
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        role: true,
+        createdAt: true,
+        updatedAt: true,
+        // Include related settings with fields from the schema
+        settings: {
+          select: {
+            id: true,
+            websiteUrl: true,
+            businessDescription: true,
+            competitors: true,
+            sitemapUrl: true,
+            hasGoogleSearchConsole: true
           }
-        },
-        orderBy: { createdAt: 'desc' }
-      }),
-      prisma.user.count({ where: whereClause })
-    ]);
+        }
+      },
+      orderBy: { createdAt: 'desc' }
+    });
+    
+    // Count total users separately
+    const total = await db.user.count({ where: whereClause });
+    
+    // Clean up connection
+    await db.$disconnect().catch(console.error);
     
     // Calculate pagination metadata
     const totalPages = Math.ceil(total / limit);
@@ -108,7 +127,7 @@ export async function GET(request: NextRequest) {
       }
     });
   } catch (error) {
-    console.error('Error in Node.js users API:', error);
+    console.error('Error in Edge users API:', error);
     
     return NextResponse.json(
       { 
@@ -122,14 +141,18 @@ export async function GET(request: NextRequest) {
 
 /**
  * POST handler for creating a new user
- * Using Node.js-specific functionality (bcryptjs)
+ * Using edge-compatible functionality
  */
 export async function POST(request: NextRequest) {
   try {
-    // Get server session using NextAuth
-    const session = await getServerSession(authOptions);
+    // Get edge-optimized Prisma client
+    const db = await getEdgePrismaClient();
+
+    // Get user ID using edge-compatible method
+    const userId = await getUserIdFromRequest(request);
     
-    if (!session?.user) {
+    if (!userId) {
+      await db.$disconnect().catch(console.error);
       return NextResponse.json(
         { error: 'Authentication required' },
         { status: 401 }
@@ -137,7 +160,13 @@ export async function POST(request: NextRequest) {
     }
     
     // Check if the user has admin privileges
-    if (session.user.role !== 'admin') {
+    const currentUser = await db.user.findUnique({
+      where: { id: userId },
+      select: { role: true }
+    });
+    
+    if (!currentUser || currentUser.role !== 'admin') {
+      await db.$disconnect().catch(console.error);
       return NextResponse.json(
         { error: 'Admin privileges required' },
         { status: 403 }
@@ -145,11 +174,22 @@ export async function POST(request: NextRequest) {
     }
     
     // Parse request body
-    const data = await request.json();
-    const { name, email, password, role } = data;
+    let data;
+    try {
+      data = await request.json();
+    } catch (e) {
+      await db.$disconnect().catch(console.error);
+      return NextResponse.json(
+        { error: 'Invalid JSON payload' },
+        { status: 400 }
+      );
+    }
+    
+    const { name, email, password, role } = data || {};
     
     // Validate input
     if (!name || !email || !password) {
+      await db.$disconnect().catch(console.error);
       return NextResponse.json(
         { error: 'Name, email, and password are required' },
         { status: 400 }
@@ -157,22 +197,24 @@ export async function POST(request: NextRequest) {
     }
     
     // Check if user already exists
-    const existingUser = await prisma.user.findUnique({
+    const existingUser = await db.user.findUnique({
       where: { email }
     });
     
     if (existingUser) {
+      await db.$disconnect().catch(console.error);
       return NextResponse.json(
         { error: 'User with this email already exists' },
         { status: 409 }
       );
     }
     
-    // Hash password using bcryptjs (Node.js specific)
-    const hashedPassword = await hash(password, 10);
+    // Use edge-compatible password hashing directly
+    // const { hashPassword } = await import('@/lib/server-auth-utils'); // Remove dynamic import
+    const hashedPassword = await hashPasswordEdge(password);
     
-    // Create user without settings to avoid type issues
-    const newUser = await prisma.user.create({
+    // Create user
+    const newUser = await db.user.create({
       data: {
         name,
         email,
@@ -189,14 +231,18 @@ export async function POST(request: NextRequest) {
     });
     
     // Create settings separately with fields from the schema
-    await prisma.settings.create({
+    await db.settings.create({
       data: {
         userId: newUser.id,
-        theme: 'light',
-        language: 'english',
-        notifications: true
+        websiteUrl: '',
+        businessDescription: '',
+        sitemapUrl: '',
+        hasGoogleSearchConsole: false
       }
     });
+    
+    // Clean up connection
+    await db.$disconnect().catch(console.error);
     
     return NextResponse.json({
       message: 'User created successfully',

@@ -1,10 +1,10 @@
 // export const runtime = 'nodejs'; // Remove runtime config
 
 import { NextRequest, NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import { getDatabaseClient } from '@/lib/db'; // Import getter
 import { getUserIdFromRequest } from '@/lib/server-auth-utils';
 import { z } from 'zod';
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, ContentPlan } from '@prisma/client';
 
 // Schema for validating content plan creation/update
 const contentPlanSchema = z.object({
@@ -15,78 +15,62 @@ const contentPlanSchema = z.object({
 
 // GET /api/content-plans - Get all content plans for user
 export async function GET(request: NextRequest) {
-  const userId = await getUserIdFromRequest(request);
-  
-  if (!userId) {
-    return NextResponse.json(
-      { success: false, message: 'Unauthorized' },
-      { status: 401 }
-    );
-  }
-  
   try {
-    // Return empty array as we're refactoring the database access
-    return NextResponse.json(
-      { success: true, data: [] },
-      { status: 200 }
-    );
+    const db = await getDatabaseClient(); // Await client
+    const userId = await getUserIdFromRequest(request);
+    if (!userId) {
+      return NextResponse.json({ message: "Authentication required" }, { status: 401 });
+    }
+
+    const plans = await db.contentPlan.findMany({
+      where: { userId },
+      orderBy: { createdAt: 'desc' },
+      include: { 
+        _count: { select: { articles: true } } // Include article count
+      }
+    });
+
+    // Map to include article count directly
+    const plansWithCount = plans.map((plan: ContentPlan & { _count: { articles: number } }) => ({
+      ...plan,
+      articleCount: plan._count.articles
+    }));
+
+    return NextResponse.json(plansWithCount);
   } catch (error) {
-    console.error('Error fetching content plans:', error);
-    return NextResponse.json(
-      { success: false, message: 'Error fetching content plans' },
-      { status: 500 }
-    );
+    console.error("Failed to fetch content plans:", error);
+    return NextResponse.json({ message: "Failed to fetch content plans" }, { status: 500 });
   }
 }
 
 // POST /api/content-plans - Create a new content plan
 export async function POST(request: NextRequest) {
-  const userId = await getUserIdFromRequest(request);
-  
-  if (!userId) {
-    return NextResponse.json(
-      { success: false, message: 'Unauthorized' },
-      { status: 401 }
-    );
-  }
-  
   try {
-    const body = await request.json();
-    
-    // Validate the request data
-    const result = contentPlanSchema.safeParse(body);
-    
-    if (!result.success) {
-      return NextResponse.json(
-        { 
-          success: false,
-          message: 'Validation failed', 
-          errors: result.error.errors 
-        }, 
-        { status: 400 }
-      );
+    const db = await getDatabaseClient(); // Await client
+    const userId = await getUserIdFromRequest(request);
+    if (!userId) {
+      return NextResponse.json({ message: "Authentication required" }, { status: 401 });
     }
-    
-    // Create a placeholder response during refactoring
-    const contentPlan = {
-      id: 'temp-id',
-      title: result.data.title,
-      description: result.data.description || '',
-      status: result.data.status || 'draft',
-      userId,
-      createdAt: new Date(),
-      updatedAt: new Date()
-    };
-    
-    return NextResponse.json(
-      { success: true, data: contentPlan },
-      { status: 201 }
-    );
+
+    const body = await request.json();
+    const { title, description } = body;
+
+    if (!title) {
+      return NextResponse.json({ message: "Title is required" }, { status: 400 });
+    }
+
+    const newPlan = await db.contentPlan.create({
+      data: {
+        title,
+        description: description || '',
+        userId,
+        status: 'draft', // Default status
+      },
+    });
+
+    return NextResponse.json(newPlan, { status: 201 });
   } catch (error) {
-    console.error('Error creating content plan:', error);
-    return NextResponse.json(
-      { success: false, message: 'Error creating content plan' },
-      { status: 500 }
-    );
+    console.error("Failed to create content plan:", error);
+    return NextResponse.json({ message: "Failed to create content plan" }, { status: 500 });
   }
 } 

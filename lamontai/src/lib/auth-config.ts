@@ -1,90 +1,107 @@
-import type { NextAuthOptions } from "next-auth";
+import { NextAuthOptions } from "next-auth";
 import CredentialsProvider from "next-auth/providers/credentials";
-import { users } from "@/lib/mock-data";
+import { verifyPassword } from "./auth-helpers";
 
-// Function to determine if we're in a Cloudflare environment
-const isCloudflareEnvironment = () => {
-  return process.env.NEXT_PUBLIC_DEPLOY_ENV === 'cloudflare';
+/**
+ * Determine if we're in an edge environment
+ */
+export const isEdgeRuntime = () => {
+  return process.env.NEXT_PUBLIC_DEPLOY_ENV === 'cloudflare' || 
+         process.env.NEXT_PUBLIC_CLOUDFLARE_ENABLED === 'true';
 };
 
-// Function to dynamically get the auth adapter
-const getAuthAdapter = async () => {
-  if (isCloudflareEnvironment()) {
-    // Dynamically import the Cloudflare adapter to avoid issues in non-Cloudflare environments
-    const { CloudflareAdapter } = await import('./auth-adapter-cloudflare');
-    return CloudflareAdapter();
-  }
-  return undefined; // Use default adapter in non-Cloudflare environments
-};
-
-// Export the auth options configuration
+// Edge-compatible auth options - this is separate from the NextAuth handler
 export const authOptions: NextAuthOptions = {
   providers: [
     CredentialsProvider({
+      id: "credentials",
       name: "Credentials",
       credentials: {
         email: { label: "Email", type: "email" },
         password: { label: "Password", type: "password" }
       },
       async authorize(credentials) {
-        if (!credentials?.email || !credentials?.password) {
+        // Defensive check for credentials
+        if (!credentials || 
+            typeof credentials !== 'object' || 
+            !credentials.email || 
+            !credentials.password || 
+            typeof credentials.email !== 'string' || 
+            typeof credentials.password !== 'string') {
+          console.log("Invalid credentials format");
           return null;
         }
-        
-        // Simple development check - use hardcoded credentials for testing
-        if (
-          (credentials.email === 'user@example.com' && credentials.password === 'password123') ||
-          (credentials.email === 'admin@example.com' && credentials.password === 'admin123')
-        ) {
-          const user = users.find(u => u.email === credentials.email);
+
+        try {
+          // Import DB client only when needed
+          const { getDatabaseClient } = await import("./db");
+          const db = await getDatabaseClient();
           
-          if (!user) return null;
-          
+          const user = await db.user.findUnique({
+            where: { email: credentials.email }
+          });
+
+          if (!user || !user.password) {
+            console.log("User not found or password not set");
+            return null;
+          }
+
+          // Handle password verification based on environment
+          let isValid = false;
+          if (isEdgeRuntime()) {
+            // For edge runtime, use edge-compatible password verification
+            const { verifyPasswordEdge } = await import("./auth-helpers-edge");
+            isValid = await verifyPasswordEdge(credentials.password, user.password);
+          } else {
+            // For Node.js, use bcrypt-based verification
+            isValid = await verifyPassword(credentials.password, user.password);
+          }
+
+          if (!isValid) {
+            console.log("Invalid password");
+            return null;
+          }
+
+          // Return minimal user info
           return {
             id: user.id,
-            name: user.name,
+            name: user.name || "",
             email: user.email,
-            role: user.role,
-            image: `https://ui-avatars.com/api/?name=${encodeURIComponent(user.name)}&background=random`
+            role: user.role || "user",
           };
+        } catch (error) {
+          console.error("Auth error:", error);
+          return null;
         }
-        
-        return null;
       }
-    }),
+    })
   ],
-  // Conditionally include adapter based on environment
-  // We'll set this dynamically when initializing NextAuth
-  // adapter: undefined,
   session: {
     strategy: "jwt",
     maxAge: 30 * 24 * 60 * 60, // 30 days
   },
-  jwt: {
-    // Customize the JWT encoding/decoding
-    maxAge: 30 * 24 * 60 * 60, // 30 days
-  },
-  pages: {
-    signIn: "/auth/login",
-    signOut: "/auth/logout",
-    error: "/auth/login",
-  },
   callbacks: {
     async jwt({ token, user }) {
+      // Safely merge user data into token
       if (user) {
-        token.id = user.id;
-        token.role = user.role;
+        token.id = user.id || "";
+        token.role = user.role || "user";
       }
       return token;
     },
     async session({ session, token }) {
-      if (session.user) {
-        session.user.id = token.id as string;
-        session.user.role = token.role as string;
+      // Ensure session and user objects exist before accessing
+      if (token && session && session.user) {
+        session.user.id = (token.id as string) || "";
+        session.user.role = (token.role as string) || "user";
       }
       return session;
-    },
+    }
   },
+  pages: {
+    signIn: "/auth/login",
+    error: "/auth/error",
+  },
+  secret: process.env.NEXTAUTH_SECRET || process.env.JWT_SECRET,
   debug: process.env.NODE_ENV === "development",
-  secret: process.env.NEXTAUTH_SECRET || "default-secret-key-for-development-only",
 }; 

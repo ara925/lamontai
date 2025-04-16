@@ -1,32 +1,45 @@
-import NextAuth from "next-auth";
-import { authOptions } from "@/lib/auth-config";
+// Use a dynamic import to support both NodeJS and Edge Runtime builds
+// This file is specifically for Node.js environment while auth-cloudflare/route.ts handles Cloudflare
 
-// Function to check if we're in Cloudflare environment
-const isCloudflareEnvironment = () => {
-  return process.env.NEXT_PUBLIC_DEPLOY_ENV === 'cloudflare';
-};
+// When building for Cloudflare, this will be skipped for page generation
+// Properly configured as a NodeJS build only
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export const preferredRegion = 'auto';
 
-// Dynamically initialize NextAuth with the appropriate configuration
-async function createHandler() {
-  let options = { ...authOptions };
-  
-  // If in Cloudflare environment, configure with Cloudflare adapter
-  if (isCloudflareEnvironment()) {
-    try {
-      // Dynamically import adapter to avoid issues in non-Cloudflare environments
-      const { CloudflareAdapter } = await import('@/lib/auth-adapter-cloudflare');
-      options.adapter = CloudflareAdapter();
-    } catch (error) {
-      console.error('Failed to load Cloudflare adapter:', error);
-      // Continue without adapter if there's an issue loading it
-    }
+import { NextRequest, NextResponse } from 'next/server';
+
+// Dynamic import to prevent build errors
+export async function GET(req: NextRequest, context: { params: { nextauth: string[] } }) {
+  try {
+    // Load NextAuth dynamically
+    const NextAuth = (await import('next-auth')).default;
+    const { authOptions } = await import('@/lib/auth-config');
+    
+    const handler = NextAuth(authOptions);
+    return handler.GET(req, context);
+  } catch (error) {
+    console.error('NextAuth GET error:', error);
+    return NextResponse.json(
+      { error: 'Authentication service unavailable' },
+      { status: 500 }
+    );
   }
-  
-  return NextAuth(options);
 }
 
-// NextAuth handler for API routes
-const handler = NextAuth(authOptions);
-
-// Export the handler for GET and POST methods
-export { handler as GET, handler as POST }; 
+export async function POST(req: NextRequest, context: { params: { nextauth: string[] } }) {
+  try {
+    // Load NextAuth dynamically
+    const NextAuth = (await import('next-auth')).default;
+    const { authOptions } = await import('@/lib/auth-config');
+    
+    const handler = NextAuth(authOptions);
+    return handler.POST(req, context);
+  } catch (error) {
+    console.error('NextAuth POST error:', error);
+    return NextResponse.json(
+      { error: 'Authentication service unavailable' },
+      { status: 500 }
+    );
+  }
+} 

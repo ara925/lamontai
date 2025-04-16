@@ -4,7 +4,7 @@
  */
 
 import { NextRequest } from 'next/server';
-import { getNeonPrismaClient } from '@/lib/prisma-cloudflare';
+import { getPrismaForEnvironment } from '@/lib/prisma-cloudflare';
 import { verifyJWTEdge, getTokenFromRequestEdge } from '@/lib/auth-utils-edge';
 
 // Specify Edge runtime
@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Get database client optimized for Cloudflare
-    const prisma = await getNeonPrismaClient();
+    const prisma = getPrismaForEnvironment();
     
     // Get URL parameters
     const { searchParams } = new URL(request.url);

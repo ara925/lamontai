@@ -4,8 +4,9 @@
  */
 
 import { NextRequest } from 'next/server';
-import { getNeonPrismaClient } from '@/lib/prisma-cloudflare';
+import { PrismaClient } from '@prisma/client';
 import { verifyJWTEdge, getTokenFromRequestEdge } from '@/lib/auth-utils-edge';
+import { createNeonAdapter } from '@/lib/driver-adapters/prisma-neon';
 
 // Specify Edge runtime
 export const runtime = 'edge';
@@ -13,38 +14,43 @@ export const runtime = 'edge';
 // Use dynamic rendering to ensure fresh data
 export const dynamic = 'force-dynamic';
 
-// Limit query complexity for Edge runtime
-const MAX_POSTS = 20;
+/**
+ * Get Prisma client optimized for edge runtime
+ */
+async function getEdgePrismaClient() {
+  const adapter = createNeonAdapter();
+  return new PrismaClient({ adapter });
+}
 
 /**
- * GET handler for retrieving posts
+ * GET handler for retrieving articles
  */
 export async function GET(request: NextRequest) {
   try {
     // Get database client optimized for Cloudflare
-    const prisma = await getNeonPrismaClient();
+    const prisma = await getEdgePrismaClient();
     
     // Get URL parameters
     const { searchParams } = new URL(request.url);
     const limit = Math.min(
       parseInt(searchParams.get('limit') || '10', 10),
-      MAX_POSTS
+      20 // MAX_ARTICLES
     );
     const page = parseInt(searchParams.get('page') || '1', 10);
     const skip = (page - 1) * limit;
     
-    // Query posts with limited fields for Edge performance
-    const [posts, total] = await Promise.all([
-      prisma.post.findMany({
+    // Query articles with limited fields for Edge performance
+    const [articles, total] = await Promise.all([
+      prisma.article.findMany({
         take: limit,
         skip,
         select: {
           id: true,
           title: true,
           content: true,
-          published: true,
+          status: true,
           createdAt: true,
-          author: {
+          user: {
             select: {
               id: true,
               name: true
@@ -55,16 +61,19 @@ export async function GET(request: NextRequest) {
           createdAt: 'desc'
         }
       }),
-      prisma.post.count()
+      prisma.article.count()
     ]);
+
+    // Clean up connection
+    await prisma.$disconnect().catch(console.error);
 
     // Calculate pagination metadata
     const totalPages = Math.ceil(total / limit);
 
-    // Return the posts with pagination
+    // Return the articles with pagination
     return new Response(
       JSON.stringify({
-        posts,
+        articles,
         pagination: {
           page,
           limit,
@@ -80,7 +89,7 @@ export async function GET(request: NextRequest) {
       }
     );
   } catch (error) {
-    console.error('Error in edge posts API:', error);
+    console.error('Error in edge articles API:', error);
     
     return new Response(
       JSON.stringify({ 
@@ -96,7 +105,7 @@ export async function GET(request: NextRequest) {
 }
 
 /**
- * POST handler for creating a post
+ * POST handler for creating an article
  */
 export async function POST(request: NextRequest) {
   try {
@@ -126,7 +135,7 @@ export async function POST(request: NextRequest) {
 
     // Parse request body
     const data = await request.json();
-    const { title, content, published = false } = data;
+    const { title, content, status = 'draft' } = data;
     
     // Validate input
     if (!title || !content) {
@@ -140,23 +149,24 @@ export async function POST(request: NextRequest) {
     }
 
     // Get database client optimized for Cloudflare
-    const prisma = await getNeonPrismaClient();
+    const prisma = await getEdgePrismaClient();
     
-    // Create post
-    const post = await prisma.post.create({
+    // Create article
+    const article = await prisma.article.create({
       data: {
         title,
         content,
-        published,
-        authorId: payload.sub as string
+        status,
+        userId: payload.sub as string,
+        keywords: data.keywords || []
       },
       select: {
         id: true,
         title: true,
         content: true,
-        published: true,
+        status: true,
         createdAt: true,
-        author: {
+        user: {
           select: {
             id: true,
             name: true
@@ -165,11 +175,14 @@ export async function POST(request: NextRequest) {
       }
     });
 
-    // Return the created post
+    // Clean up connection
+    await prisma.$disconnect().catch(console.error);
+
+    // Return the created article
     return new Response(
       JSON.stringify({
-        message: 'Post created successfully',
-        post
+        message: 'Article created successfully',
+        article
       }),
       {
         status: 201,
@@ -177,7 +190,7 @@ export async function POST(request: NextRequest) {
       }
     );
   } catch (error) {
-    console.error('Error creating post:', error);
+    console.error('Error creating article:', error);
     
     return new Response(
       JSON.stringify({ 

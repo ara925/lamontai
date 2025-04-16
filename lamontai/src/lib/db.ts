@@ -1,138 +1,206 @@
 /**
- * Database connection management
- * Automatically selects the appropriate connection based on environment
+ * Database client abstraction layer
+ * This module provides a unified API for accessing the database in any environment
  */
 
 import { PrismaClient } from '@prisma/client'
+import { getPrismaForEnvironment } from './prisma-cloudflare'
 
-// Set up global type for PrismaClient with all needed global variables
-declare global {
-  // eslint-disable-next-line no-var
-  var _prisma: PrismaClient | undefined;
-  var dbPrisma: PrismaClient | undefined;
-}
+// Conditionally import mock dependencies only in test environment
+// This prevents build errors when jest-mock-extended is not available
+let mockDeep: any = () => ({});
+let mockReset: any = () => {};
+let DeepMockProxy: any;
 
-// Simple DB mock for development and testing
-// This avoids Edge Runtime issues in Next.js
-// Define the mock database client
-export const dbMock = {
-  // Mock user operations
-  user: {
-    findUnique: async ({ where }: { where: any }) => {
-      console.log('Mock DB: findUnique called with:', where);
-      return null; // Simulate user not found
-    },
-    create: async ({ data }: { data: any }) => {
-      console.log('Mock DB: create called with:', data);
-      return { ...data, id: 'mock-user-id' }; // Return mock user
-    }
-  },
-  
-  // Mock connection functions
-  $connect: async () => {
-    console.log('Mock DB: connect called');
-    return Promise.resolve();
-  },
-  
-  $disconnect: async () => {
-    console.log('Mock DB: disconnect called');
-    return Promise.resolve();
-  },
-  
-  $transaction: async (callback: (tx: any) => Promise<any>) => {
-    console.log('Mock DB: transaction called');
-    // Simple pass-through transaction that just calls the callback with the mock db
-    return callback(dbMock);
-  }
-};
-
-// Function to initialize the PrismaClient with appropriate configuration
-function createPrismaClient(): PrismaClient {
-  return new PrismaClient({
-    log: process.env.NODE_ENV === 'development' 
-      ? ['query', 'error', 'warn'] 
-      : ['error'],
-  });
-}
-
-// Use a singleton pattern to prevent multiple instances in development
-let prisma: PrismaClient;
-
-// Check if we're in production to avoid multiple connections during hot reload
-if (process.env.NODE_ENV === 'production') {
-  prisma = createPrismaClient();
-} else {
-  // In development, use the global variable if available
-  if (!global._prisma) {
-    global._prisma = createPrismaClient();
-  }
-  prisma = global._prisma;
-}
-
-// Utility functions for the database
-export async function ensureDatabaseConnection(): Promise<void> {
+// Only attempt to import jest-mock-extended in test environment
+if (process.env.NODE_ENV === 'test') {
   try {
-    // Simple query to check connection
-    await prisma.$queryRaw`SELECT 1`;
-  } catch (error) {
-    console.error('Database connection error:', error);
-    console.log('Using mock database instead');
-    return;
+    // Dynamic import to avoid issues in non-test environments
+    const jestMockExtended = require('jest-mock-extended');
+    mockDeep = jestMockExtended.mockDeep;
+    mockReset = jestMockExtended.mockReset;
+    DeepMockProxy = jestMockExtended.DeepMockProxy;
+  } catch (e) {
+    console.log('jest-mock-extended not available, using mock functions');
   }
 }
-
-export { prisma };
-
-// Environment-specific client selection
-// For backward compatibility with existing code
-export const db = process.env.NODE_ENV === 'development' ? dbMock : prisma;
-
-export const dbUtils = {
-  ensureConnection: ensureDatabaseConnection
-};
 
 /**
- * Initialize the database connection
- * Call this in your app initialization to ensure the database is ready
+ * Check if we're in the Edge Runtime based on environment variables
  */
-export async function initializeDatabase() {
+const isEdgeRuntime = () => {
   try {
-    await ensureDatabaseConnection();
+    return process.env.NEXT_PUBLIC_DEPLOY_ENV === 'cloudflare' || 
+           process.env.NEXT_RUNTIME === 'edge' || 
+           typeof (global as any).EdgeRuntime !== 'undefined';
+  } catch (e) {
+    // If process is not defined, we're likely in an edge environment
     return true;
-  } catch (error) {
-    console.error('Failed to initialize database:', error);
+  }
+}
+
+/**
+ * Check if we're in a build environment
+ */
+const isBuildTime = () => {
+  try {
+    return process.env.NODE_ENV === 'production' && process.env.NEXT_PHASE === 'phase-production-build';
+  } catch (e) {
+    // If there's an error accessing process, we're not in build time
     return false;
   }
 }
 
-// Cloudflare-specific database client handling
-let cloudflareDb: any = null;
+/**
+ * Augment global scope with prisma client for development
+ */
+declare global {
+  var prisma: PrismaClient | undefined
+}
+
+// For testing - mock client
+export type MockPrismaClient = any
+export const prismaMock = typeof mockDeep === 'function' ? mockDeep() : {} as PrismaClient
+export const resetMocks = () => typeof mockReset === 'function' && mockReset(prismaMock)
+
+// Global references for singleton pattern
+let prismaClientSingleton: PrismaClient | null = null;
+let prismaClientBuild: any | undefined;
 
 /**
- * Get the appropriate database client based on the current environment
- * This is specifically designed to handle Cloudflare edge runtime
+ * Create a mock client that doesn't throw errors
  */
-export async function getDatabaseClient() {
-  // For Cloudflare Workers/Pages environment
-  if (process.env.NEXT_PUBLIC_DEPLOY_ENV === 'cloudflare') {
-    try {
-      if (!cloudflareDb) {
-        // Dynamically import Cloudflare-specific client to avoid Node.js dependencies
-        // in the Edge runtime
-        const { getPrismaClient } = await import('./prisma-cloudflare');
-        cloudflareDb = getPrismaClient();
+const createMockClient = () => {
+  const handler = {
+    get: function(target: any, prop: string) {
+      // Handle special methods
+      if (prop === 'connect' || prop === 'disconnect' || prop === '$connect' || prop === '$disconnect') {
+        return () => Promise.resolve()
       }
-      return cloudflareDb;
-    } catch (error) {
-      console.error('Failed to load Cloudflare database client:', error);
-      // Fall back to mock for safety in Cloudflare environment
-      return dbMock;
+      
+      // For model operations, return a proxy that handles operations
+      return new Proxy({}, {
+        get: function(_: any, operation: string | symbol) {
+          return (...args: any[]) => {
+            console.log(`Mock DB operation: ${prop}.${String(operation)}`, args)
+            // Return empty arrays for findMany, null for findUnique/findFirst
+            if (String(operation) === 'findMany') {
+              return Promise.resolve([])
+            } else if (String(operation) === 'findUnique' || String(operation) === 'findFirst') {
+              return Promise.resolve(null)
+            } else if (String(operation) === 'create' || String(operation) === 'update' || String(operation) === 'upsert') {
+              // Return a mock object for mutations
+              return Promise.resolve({ id: 'mock-id', ...args[0]?.data })
+            } else if (String(operation) === 'count') {
+              return Promise.resolve(0)
+            } else {
+              return Promise.resolve(null)
+            }
+          }
+        }
+      })
     }
   }
   
-  // For standard Node.js environment (non-Cloudflare)
-  return db;
+  return new Proxy({}, handler)
+}
+
+/**
+ * Create a database client appropriate for the current environment
+ */
+const createPrismaClient = async (): Promise<PrismaClient> => {
+  // For tests, return the mock
+  if (process.env.NODE_ENV === 'test') {
+    return prismaMock
+  }
+
+  // For build time - avoid actual DB connections
+  if (isBuildTime()) {
+    if (!prismaClientBuild) {
+      prismaClientBuild = createMockClient()
+    }
+    return prismaClientBuild
+  }
+
+  // Return existing client if available
+  if (prismaClientSingleton) {
+    return prismaClientSingleton
+  }
+  
+  try {
+    // Use getPrismaForEnvironment which will handle both edge and non-edge environments
+    prismaClientSingleton = await getPrismaForEnvironment();
+    return prismaClientSingleton;
+  } catch (e) {
+    console.error('Error creating Prisma client:', e)
+    // Return a mock client as fallback
+    return createMockClient() as unknown as PrismaClient
+  }
+}
+
+// Initialize client carefully to prevent errors during build
+let dbClientPromise: Promise<PrismaClient>;
+
+try {
+  // Only create a real client outside of build time
+  if (typeof globalThis !== 'undefined' && !isBuildTime()) {
+    if (globalThis.prisma) {
+      dbClientPromise = Promise.resolve(globalThis.prisma);
+    } else {
+      dbClientPromise = createPrismaClient();
+      
+      // Cache the client in globalThis for development
+      if (process.env.NODE_ENV !== 'production') {
+        dbClientPromise.then(client => {
+          globalThis.prisma = client;
+        });
+      }
+    }
+  } else {
+    dbClientPromise = Promise.resolve(createMockClient() as unknown as PrismaClient);
+  }
+} catch (e) {
+  console.error('Error initializing Prisma client:', e);
+  dbClientPromise = Promise.resolve(createMockClient() as unknown as PrismaClient);
+}
+
+// Export the client - this is now a promise but we maintain the same API
+// export const db = await dbClientPromise; // REMOVED top-level await export
+
+// Helper to ensure DB is connected before operations
+export async function ensureDbConnected() {
+  if (process.env.NODE_ENV === 'test' || isBuildTime()) {
+    // No real connection needed for tests/build
+    return Promise.resolve()
+  }
+
+  try {
+    const db = await getDatabaseClient(); // Get the client instance
+    // @ts-ignore - connection methods might not be available on all clients
+    if (db && db.$connect) { // Check if db exists and has $connect
+      await db.$connect()
+    }
+    return Promise.resolve()
+  } catch (error) {
+    console.error('Error connecting to database:', error)
+    return Promise.reject(error)
+  }
+}
+
+// Initialize database (useful for middleware/setup)
+export async function initializeDb() {
+  const db = await getDatabaseClient(); // Await the getter here
+  await ensureDbConnected() // This might need adjustment if ensureDbConnected expects the client directly
+  console.log('Database initialized')
+  return db
+}
+
+// Get the appropriate database client based on the current environment
+export async function getDatabaseClient(): Promise<PrismaClient> {
+  // Return the promise, let the caller await
+  return dbClientPromise;
 }
 
 // Default export
-export default { db, prisma, dbMock, getDatabaseClient }; 
+// export default { db, getDatabaseClient }; // Remove db from default export
+export default { getDatabaseClient }; 

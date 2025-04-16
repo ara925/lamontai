@@ -137,92 +137,53 @@ function addSecurityHeaders(response: NextResponse) {
 
 // Temporarily disable middleware for debugging
 export async function middleware(request: NextRequest) {
+  // Get the pathname from the URL
+  const pathname = request.nextUrl.pathname;
+
+  // Handle authentication
+  if (pathname.startsWith('/dashboard') || pathname.startsWith('/api/private')) {
+    // Check if the user is authenticated
+    const authToken = request.cookies.get('next-auth.session-token')?.value || 
+                      request.cookies.get('__Secure-next-auth.session-token')?.value;
+    
+    if (!authToken) {
+      // Redirect to login if not authenticated
+      const url = new URL('/auth/login', request.url);
+      // Add the original URL as a query parameter for return after login
+      url.searchParams.set('callbackUrl', encodeURI(request.url));
+      return NextResponse.redirect(url);
+    }
+  }
+
+  // Skip middleware for static assets
+  if (
+    pathname.includes('/_next') ||
+    pathname.includes('/images') ||
+    pathname.includes('/fonts') ||
+    pathname.includes('/favicon.ico')
+  ) {
+    return NextResponse.next();
+  }
+
+  // Add security headers
   const response = NextResponse.next();
   
-  try {
-    // Special case for edge routes that handle their own auth
-    if (request.nextUrl.pathname.includes('/api/users/edge') ||
-        request.nextUrl.pathname.includes('/api/posts/edge')) {
-      return response;
-    }
-    
-    // Skip auth check for public routes 
-    if (request.nextUrl.pathname === '/api/health' ||
-        request.nextUrl.pathname === '/api/public') {
-      return response;
-    }
-
-    // Add CORS headers for API routes
-    response.headers.set('Access-Control-Allow-Credentials', 'true');
-    response.headers.set('Access-Control-Allow-Origin', '*');
-    response.headers.set('Access-Control-Allow-Methods', 'GET,DELETE,PATCH,POST,PUT');
-    response.headers.set('Access-Control-Allow-Headers', 
-      'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version, Authorization');
-
-    // Handle preflight requests
-    if (request.method === 'OPTIONS') {
-      return response;
-    }
-
-    // Check for authentication token
-    const token = getTokenFromRequestEdge(request);
-    if (!token) {
-      return new NextResponse(
-        JSON.stringify({ error: 'Authentication required' }),
-        {
-          status: 401,
-          headers: {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET,DELETE,PATCH,POST,PUT',
-          },
-        }
-      );
-    }
-
-    // Verify JWT token
-    const payload = await verifyJWTEdge(token);
-    if (!payload) {
-      return new NextResponse(
-        JSON.stringify({ error: 'Invalid token' }),
-        {
-          status: 401,
-          headers: {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Methods': 'GET,DELETE,PATCH,POST,PUT',
-          },
-        }
-      );
-    }
-
-    // Add the user ID to the request headers for API routes to use
-    if (payload.sub) {
-      response.headers.set('X-User-ID', payload.sub as string);
-    }
-    
-    // Add the user role if available
-    if (payload.role) {
-      response.headers.set('X-User-Role', payload.role as string);
-    }
-
-    return response;
-  } catch (error) {
-    console.error('Middleware error:', error);
-    
-    // Return a generic error
-    return new NextResponse(
-      JSON.stringify({ error: 'Internal server error' }),
-      {
-        status: 500,
-        headers: {
-          'Content-Type': 'application/json',
-          'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'GET,DELETE,PATCH,POST,PUT',
-        },
-      }
+  // Apply security headers when not in development
+  if (process.env.NODE_ENV !== 'development') {
+    // Content Security Policy
+    response.headers.set(
+      'Content-Security-Policy',
+      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; connect-src 'self' https://*.vercel-insights.com https://*.cloudflare.com; frame-ancestors 'none';"
     );
+    
+    // Other security headers
+    response.headers.set('X-Frame-Options', 'DENY');
+    response.headers.set('X-Content-Type-Options', 'nosniff');
+    response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+    response.headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
   }
+
+  return response;
 }
 
 /**
@@ -230,8 +191,15 @@ export async function middleware(request: NextRequest) {
  */
 export const config = {
   matcher: [
-    // Match all API routes except those that are edge-compatible
-    '/api/((?!auth/edge|posts/edge|users/edge|stest|edge-test).*)',
+    /*
+     * Match all request paths except:
+     * 1. Edge API routes (/api/auth/edge, /api/edge-test, etc)
+     * 2. Static files (/_next/, /images/, /fonts/, /favicon.ico)
+     * 3. Static HTML files (/404, /500, etc.)
+     */
+    '/((?!api/auth/edge|api/edge-test|api/posts/edge|api/users/edge|api/stest|_next/|images/|fonts/|favicon.ico|404|500).*)',
+    '/dashboard/:path*',
+    '/api/private/:path*',
   ],
   // Specify that we want this middleware to run on both Node.js and Edge
   runtime: 'experimental-edge',
