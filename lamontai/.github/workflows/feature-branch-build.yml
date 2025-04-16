@@ -33,8 +33,6 @@ jobs:
       run: |
         echo "NODE_OPTIONS=--max-old-space-size=4096" >> $GITHUB_ENV
         echo "NEXT_TELEMETRY_DISABLED=1" >> $GITHUB_ENV
-        echo "NEXT_IGNORE_TYPE_ERRORS=1" >> $GITHUB_ENV
-        echo "NEXT_IGNORE_ESLINT_DURING_BUILDS=1" >> $GITHUB_ENV
     
     - name: Install dependencies
       working-directory: lamontai
@@ -91,7 +89,6 @@ jobs:
         
         # Attempt build with increased memory and timeout handling
         echo "Starting build process at $(date)..."
-        export NEXT_IGNORE_TYPE_ERRORS=1
         
         # Run the build with timing and error capturing
         time npm run build > build.log 2>&1 || {

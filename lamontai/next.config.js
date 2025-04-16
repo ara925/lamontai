@@ -72,14 +72,14 @@ const nextConfig = {
   
   // Enable TypeScript type checking in build
   typescript: {
-    // Only ignore build errors in CI environment to prevent hanging
-    ignoreBuildErrors: isCI,
+    // Always check TypeScript during builds
+    ignoreBuildErrors: false,
   },
   
   // Enable ESLint checks in build
   eslint: {
-    // Only ignore ESLint errors in CI environment
-    ignoreDuringBuilds: isCI,
+    // Always check ESLint during builds
+    ignoreDuringBuilds: false,
   },
   
   // Apply security headers to all routes

@@ -32,7 +32,7 @@ jobs:
 
       - name: Run linting
         working-directory: lamontai
-        run: npm run lint || true # Continue even if linting fails for now
+        run: npm run lint
 
       - name: Run tests
         working-directory: lamontai
@@ -41,7 +41,7 @@ jobs:
   deploy:
     needs: test
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # Added explicit timeout to prevent hanging indefinitely
+    timeout-minutes: 45  # Increased timeout for full type-checking and linting
     # Skip deployment for pull requests, only deploy on push to main or staging or feature branch
     if: github.event_name == 'push'
     
@@ -87,6 +87,9 @@ jobs:
             echo "NEXT_PUBLIC_DEPLOY_ENV=cloudflare" >> $GITHUB_ENV
             echo "NEXT_PUBLIC_CLOUDFLARE_ENABLED=true" >> $GITHUB_ENV
           fi
+          
+          # Set memory options without disabling type checking or linting
+          echo "NODE_OPTIONS=--max-old-space-size=6144" >> $GITHUB_ENV
       
       - name: Install dependencies
         working-directory: lamontai
@@ -143,8 +146,8 @@ jobs:
           # Verify polyfill installation
           npm list stream-browserify crypto-browserify
           
-          echo "Setting NODE_OPTIONS to increase memory limit..."
-          export NODE_OPTIONS="--max-old-space-size=4096"
+          echo "Setting up build environment..."
+          export NODE_OPTIONS="--max-old-space-size=6144"
           
           echo "Build preparation complete."
       
@@ -154,20 +157,28 @@ jobs:
           # Set required environment variables
           export NEXT_PUBLIC_DEPLOY_ENV=cloudflare
           export NODE_ENV=${{ env.ENVIRONMENT }}
-          export NODE_OPTIONS="--max-old-space-size=4096"
+          export NODE_OPTIONS="--max-old-space-size=6144"
           
-          echo "Starting build process..."
+          echo "Starting build process with full type checking and linting..."
+          
+          # Set up background process to output progress every 30 seconds to prevent timeouts
+          (while true; do echo "Build still in progress... $(date)"; sleep 30; done) &
+          PROGRESS_PID=$!
           
           # Run build with incremental logging to prevent timeout
           npm run build | tee build.log || {
             echo "Build failed with error code $?"
             if [ -f build.log ]; then
-              echo "Last 50 lines of build log:"
-              tail -n 50 build.log
+              echo "Last 100 lines of build log:"
+              tail -n 100 build.log
             fi
+            # Kill the progress monitor
+            kill $PROGRESS_PID
             exit 1
           }
           
+          # Kill the progress monitor
+          kill $PROGRESS_PID
           echo "Build process completed."
       
       - name: Verify build output
