@@ -14,6 +14,7 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -40,6 +41,7 @@ jobs:
   deploy:
     needs: test
     runs-on: ubuntu-latest
+    timeout-minutes: 30  # Added explicit timeout to prevent hanging indefinitely
     # Skip deployment for pull requests, only deploy on push to main or staging or feature branch
     if: github.event_name == 'push'
     
@@ -88,7 +90,11 @@ jobs:
       
       - name: Install dependencies
         working-directory: lamontai
-        run: npm ci
+        run: |
+          echo "Starting dependency installation..."
+          npm ci --no-audit --prefer-offline
+          echo "Dependency installation completed."
+          npm list --depth=0
       
       - name: Create environment-specific .env file
         working-directory: lamontai
@@ -125,24 +131,49 @@ jobs:
           
           # Also create .env for additional variable resolution
           cp .env.deploy .env
+          
+          echo "Environment files created successfully."
       
-      - name: Build application
+      - name: Install polyfills and prepare build
         working-directory: lamontai
         run: |
-          # Install additional polyfills if needed
-          npm install --no-save stream-browserify
-          npm install --no-save crypto-browserify
+          echo "Installing polyfills..."
+          npm install --no-save stream-browserify crypto-browserify path-browserify buffer process
           
-          # Set required environment variables and build
+          # Verify polyfill installation
+          npm list stream-browserify crypto-browserify
+          
+          echo "Setting NODE_OPTIONS to increase memory limit..."
+          export NODE_OPTIONS="--max-old-space-size=4096"
+          
+          echo "Build preparation complete."
+      
+      - name: Build application with progress tracking
+        working-directory: lamontai
+        run: |
+          # Set required environment variables
           export NEXT_PUBLIC_DEPLOY_ENV=cloudflare
           export NODE_ENV=${{ env.ENVIRONMENT }}
+          export NODE_OPTIONS="--max-old-space-size=4096"
           
-          # Run build with detailed output
-          npm run build
+          echo "Starting build process..."
+          
+          # Run build with incremental logging to prevent timeout
+          npm run build | tee build.log || {
+            echo "Build failed with error code $?"
+            if [ -f build.log ]; then
+              echo "Last 50 lines of build log:"
+              tail -n 50 build.log
+            fi
+            exit 1
+          }
+          
+          echo "Build process completed."
       
       - name: Verify build output
         working-directory: lamontai
         run: |
+          echo "Verifying build output..."
           if [ ! -d "./.next" ]; then
             echo "Build output directory .next not found!"
             exit 1
@@ -151,6 +182,11 @@ jobs:
           # List build output to verify content
           echo "Build output contents:"
           ls -la ./.next
+          
+          # Check size of output directory
+          du -sh ./.next
+          
+          echo "Build verification complete."
       
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/pages-action@v1

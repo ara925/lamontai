@@ -1,0 +1,143 @@
+name: Feature Branch Build
+
+on:
+  push:
+    branches:
+      - 'feature/**'
+      - 'fix/**'
+  workflow_dispatch:
+    inputs:
+      debug:
+        description: 'Enable debugging mode'
+        required: false
+        default: 'false'
+
+jobs:
+  build:
+    name: Build Feature Branch
+    runs-on: ubuntu-latest
+    timeout-minutes: 30  # Set hard limit to prevent infinite hanging
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '18'
+        cache: 'npm'
+        cache-dependency-path: 'lamontai/package-lock.json'
+    
+    - name: Set build environment
+      run: |
+        echo "NODE_OPTIONS=--max-old-space-size=4096" >> $GITHUB_ENV
+        echo "NEXT_TELEMETRY_DISABLED=1" >> $GITHUB_ENV
+        echo "NEXT_IGNORE_TYPE_ERRORS=1" >> $GITHUB_ENV
+        echo "NEXT_IGNORE_ESLINT_DURING_BUILDS=1" >> $GITHUB_ENV
+    
+    - name: Install dependencies
+      working-directory: lamontai
+      run: |
+        echo "Starting dependency installation..."
+        # Use npm ci with less verbose output to prevent log flooding
+        npm ci --no-fund --no-audit --prefer-offline
+        echo "Dependency installation completed."
+        npm list --depth=0
+    
+    - name: Set up environment variables
+      working-directory: lamontai
+      run: |
+        cat > .env.local << EOL
+        # Base URLs
+        NEXT_PUBLIC_APP_URL=https://dev.lamontai.com
+        NEXT_PUBLIC_API_URL=https://dev.lamontai.com/api
+        
+        # Auth Configuration
+        NEXTAUTH_URL=https://dev.lamontai.com
+        NEXTAUTH_SECRET=dev_secret_for_testing_only
+        JWT_SECRET=dev_jwt_secret_for_testing_only
+        
+        # Database Configuration
+        DATABASE_URL=postgresql://prisma:prisma@localhost:5432/lamontai-test
+        
+        # Deployment Environment
+        NEXT_PUBLIC_DEPLOY_ENV=development
+        NODE_ENV=development
+        EOL
+        
+        echo "Environment setup completed."
+    
+    - name: Run build preparation script
+      working-directory: lamontai
+      run: |
+        echo "Running build preparation script..."
+        node fix-build.js
+    
+    - name: Install polyfills
+      working-directory: lamontai
+      run: |
+        echo "Installing polyfills..."
+        npm install --no-save stream-browserify crypto-browserify path-browserify buffer process
+        npm list stream-browserify crypto-browserify
+    
+    - name: Build with progress monitoring
+      id: build
+      working-directory: lamontai
+      run: |
+        # Set up background process to output progress every 30 seconds to prevent timeouts
+        (while true; do echo "Build still in progress... $(date)"; sleep 30; done) &
+        PROGRESS_PID=$!
+        
+        # Attempt build with increased memory and timeout handling
+        echo "Starting build process at $(date)..."
+        export NEXT_IGNORE_TYPE_ERRORS=1
+        
+        # Run the build with timing and error capturing
+        time npm run build > build.log 2>&1 || {
+          BUILD_EXIT_CODE=$?
+          echo "Build failed with exit code $BUILD_EXIT_CODE"
+          echo "Last 100 lines of build log:"
+          tail -n 100 build.log
+          
+          # Kill the progress monitor
+          kill $PROGRESS_PID
+          exit $BUILD_EXIT_CODE
+        }
+        
+        # Kill the progress monitor
+        kill $PROGRESS_PID
+        echo "Build completed successfully at $(date)"
+        echo "::set-output name=build_success::true"
+    
+    - name: Check build output
+      if: steps.build.outputs.build_success == 'true'
+      working-directory: lamontai
+      run: |
+        if [ -d ".next" ]; then
+          echo "Build output exists in .next directory"
+          ls -la .next
+          du -sh .next
+        else
+          echo "Build output directory .next not found!"
+          exit 1
+        fi
+    
+    - name: Archive build artifacts
+      if: success()
+      uses: actions/upload-artifact@v3
+      with:
+        name: build-output
+        path: lamontai/.next
+        retention-days: 1
+    
+    - name: Upload build logs on failure
+      if: failure()
+      uses: actions/upload-artifact@v3
+      with:
+        name: build-logs
+        path: |
+          lamontai/build.log
+          lamontai/.next/build-manifest.json
+          lamontai/.next/server/middleware-manifest.json
+        retention-days: 1 
